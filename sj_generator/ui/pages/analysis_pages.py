@@ -128,6 +128,8 @@ class AiAnalysisPage(QWizardPage):
 
         self._status_label = QLabel("")
         self._status_label.setWordWrap(True)
+        self._current_label = QLabel("")
+        self._current_label.setWordWrap(True)
 
         self._table = QTableWidget()
         self._table.setColumnCount(6)
@@ -155,6 +157,7 @@ class AiAnalysisPage(QWizardPage):
 
         layout = QVBoxLayout()
         layout.addWidget(self._status_label)
+        layout.addWidget(self._current_label)
         layout.addLayout(progress_row)
         layout.addWidget(self._table, 3)
         self.setLayout(layout)
@@ -164,6 +167,9 @@ class AiAnalysisPage(QWizardPage):
         self._done = False
         self._tasks: list[tuple[int, str, str]] = []
         self._failed_rows: set[int] = set()
+        self._current_task_no = 0
+        self._total_task_count = 0
+        self._completed_task_count = 0
         self._refresh_status()
 
     def initializePage(self) -> None:
@@ -173,6 +179,9 @@ class AiAnalysisPage(QWizardPage):
         self._done = False
         self._tasks = []
         self._failed_rows = set()
+        self._current_task_no = 0
+        self._total_task_count = 0
+        self._completed_task_count = 0
         self._stop_btn.setEnabled(False)
         self._retry_btn.setEnabled(False)
         self._load_repo()
@@ -236,6 +245,9 @@ class AiAnalysisPage(QWizardPage):
 
     def _prepare_tasks(self) -> None:
         self._tasks = self._collect_tasks()
+        self._total_task_count = len(self._tasks)
+        self._current_task_no = 0
+        self._completed_task_count = 0
         self._progress.setRange(0, len(self._tasks) if self._tasks else 0)
         self._progress.setValue(0)
         w = self.wizard()
@@ -243,10 +255,12 @@ class AiAnalysisPage(QWizardPage):
             w.setButtonText(QWizard.WizardButton.NextButton, "下一步")
         if not self._tasks:
             self._status_label.setText("无需生成解析。")
+            self._current_label.setText("")
             self._done = True
             self.completeChanged.emit()
         else:
             self._status_label.setText("进入本页后将自动开始生成解析。")
+            self._current_label.setText("")
 
     def cleanupPage(self) -> None:
         w = self.wizard()
@@ -293,6 +307,7 @@ class AiAnalysisPage(QWizardPage):
         self._progress.setRange(0, len(tasks))
         self._progress.setValue(0)
         self._status_label.setText("批量生成：准备开始…")
+        self._current_label.setText("")
         w = self.wizard()
         if isinstance(w, QWizard):
             w.setButtonText(QWizard.WizardButton.NextButton, "生成中…")
@@ -307,6 +322,7 @@ class AiAnalysisPage(QWizardPage):
         )
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
+        worker.processing.connect(self._on_batch_processing)
         worker.progress.connect(self._on_batch_progress)
         worker.row_done.connect(self._on_batch_row_done)
         worker.row_failed.connect(self._on_batch_row_failed)
@@ -326,11 +342,19 @@ class AiAnalysisPage(QWizardPage):
         self._worker.request_stop()
         self._stop_btn.setEnabled(False)
         self._status_label.setText("正在停止…")
+        self._current_label.setText("")
 
     def _on_batch_progress(self, cur: int, total: int) -> None:
         self._progress.setRange(0, total)
         self._progress.setValue(max(0, min(cur, total)))
-        self._status_label.setText(f"批量生成：{cur}/{total}")
+        self._completed_task_count = cur
+        self._status_label.setText(self._build_running_status())
+
+    def _on_batch_processing(self, current: int, total: int) -> None:
+        self._current_task_no = current
+        self._total_task_count = total
+        self._status_label.setText(self._build_running_status())
+        self._current_label.setText(f"选择题 {current}/{total} 题解析中")
 
     def _on_batch_row_done(self, row: int, text: str, elapsed_s: float) -> None:
         existing = self._table.item(row, 4).text().strip() if self._table.item(row, 4) else ""
@@ -345,6 +369,7 @@ class AiAnalysisPage(QWizardPage):
         self._failed_rows.add(row)
         row_no = row + 1
         self._status_label.setText(f"第 {row_no} 行生成失败：{msg}")
+        self._current_label.setText(f"第 {row_no} 行处理失败")
 
     def _on_batch_done(self, stopped: bool) -> None:
         repo = self._state.repo_path
@@ -358,6 +383,7 @@ class AiAnalysisPage(QWizardPage):
             return
 
         self._status_label.setText("批量生成：写回题库…")
+        self._current_label.setText("")
         questions: list[Question] = []
         for r in range(self._table.rowCount()):
             number = self._table.item(r, 0).text().strip() if self._table.item(r, 0) else ""
@@ -377,11 +403,15 @@ class AiAnalysisPage(QWizardPage):
             self._thread = None
             self._worker = None
             self._refresh_status()
+            self._current_label.setText("")
             self.completeChanged.emit()
             return
 
         self._progress.setValue(self._progress.maximum())
         self._tasks = self._collect_tasks()
+        self._current_task_no = 0
+        self._completed_task_count = 0
+        self._total_task_count = len(self._tasks)
         pending = len(self._tasks)
         failed = len(self._failed_rows)
         if pending > 0:
@@ -402,6 +432,7 @@ class AiAnalysisPage(QWizardPage):
         self._done = True
         self._thread = None
         self._worker = None
+        self._current_label.setText("")
         self._refresh_status()
         w = self.wizard()
         if isinstance(w, QWizard):
@@ -411,11 +442,15 @@ class AiAnalysisPage(QWizardPage):
     def _on_batch_error(self, msg: str) -> None:
         QMessageBox.critical(self, "生成失败", msg)
         self._status_label.setText("生成失败。")
+        self._current_label.setText("")
         self._running = False
         self._done = False
         self._thread = None
         self._worker = None
         self._tasks = self._collect_tasks()
+        self._current_task_no = 0
+        self._completed_task_count = 0
+        self._total_task_count = len(self._tasks)
         self._refresh_status()
         w = self.wizard()
         if isinstance(w, QWizard):
@@ -427,15 +462,30 @@ class AiAnalysisPage(QWizardPage):
             return
         self._tasks = self._collect_tasks()
         if self._tasks:
+            self._total_task_count = len(self._tasks)
+            self._current_task_no = 0
+            self._completed_task_count = 0
             self._progress.setRange(0, len(self._tasks))
             self._progress.setValue(0)
             self._done = False
             self._refresh_status()
             self._status_label.setText("准备重试生成解析…")
+            self._current_label.setText("")
             QTimer.singleShot(0, self._start_generation)
+
+    def _build_running_status(self) -> str:
+        total = self._total_task_count
+        current = self._current_task_no
+        completed = self._completed_task_count
+        if total > 0 and current > 0:
+            return f"选择题 {current}/{total} 题解析中，已完成 {completed}/{total}"
+        if total > 0:
+            return f"批量生成：已完成 {completed}/{total}"
+        return "批量生成中…"
 
 
 class _AiAnalysisWorker(QObject):
+    processing = pyqtSignal(int, int)
     progress = pyqtSignal(int, int)
     row_done = pyqtSignal(int, str, float)
     row_failed = pyqtSignal(int, str)
@@ -470,6 +520,7 @@ class _AiAnalysisWorker(QObject):
             for row, qtext, atext in self._tasks:
                 if self._stop:
                     break
+                self.processing.emit(done_count + 1, total)
                 try:
                     started_at = time.perf_counter()
                     inp = ExplanationInputs(

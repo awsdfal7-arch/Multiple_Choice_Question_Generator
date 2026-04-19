@@ -200,6 +200,7 @@ class AiImportPage(QWizardPage):
 
         self._progress = QProgressBar()
         self._progress.setRange(0, 0)
+        self._progress.setFormat("正在统计题数…")
 
         self._stop_btn = QPushButton("停止解析")
         self._stop_btn.clicked.connect(self._stop)
@@ -378,11 +379,13 @@ class AiImportPage(QWizardPage):
         self._progress_total = max(0, total)
         if total <= 0:
             self._progress.setRange(0, 0)
+            self._progress.setFormat("正在统计题数…")
             self._render_status()
             return
         if self._progress.maximum() != total:
             self._progress.setRange(0, total)
         self._progress.setValue(max(0, min(cur, total)))
+        self._progress.setFormat("选择题 %v/%m题")
         self._render_status()
 
     def _on_question(self, q: Question) -> None:
@@ -611,6 +614,7 @@ class AiImportPage(QWizardPage):
         self._items = []
         self._progress.setRange(0, 0)
         self._progress.setValue(0)
+        self._progress.setFormat("正在统计题数…")
         self._reset_progress_meta()
         self._phase_text = "准备重试解析…"
         self._committed = False
@@ -670,8 +674,25 @@ class AiImportPage(QWizardPage):
         b = "可用" if self._qwen_ready else "不可用"
         c = "可用" if self._kimi_ready else "不可用"
         line1 = f"DeepSeek：{a}；千问：{b}；Kimi：{c}"
-        line2 = f"资料：{self._cur_source_name}；第{self._cur_question_no}题；第{self._cur_round_no}轮"
+        line2 = (
+            f"资料：{self._cur_source_name}；"
+            f"{self._build_question_progress_text()}；"
+            f"第{self._cur_round_no}轮"
+        )
         self._status_label.setText(line1 + "\n" + line2)
+
+    def _build_question_progress_text(self) -> str:
+        total = self._progress_total
+        cur_question = str(self._cur_question_no).strip()
+        if total > 0:
+            if cur_question.isdigit():
+                cur = min(max(int(cur_question), 1), total)
+            else:
+                cur = min(max(self._progress_cur, 0), total)
+            return f"选择题 {cur}/{total}题"
+        if cur_question.isdigit():
+            return f"选择题 {cur_question}/?题"
+        return "选择题 统计中"
 
 
 class _AiImportWorker(QObject):
