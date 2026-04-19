@@ -1,0 +1,494 @@
+import time
+from pathlib import Path
+from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal
+from PyQt6.QtWidgets import (
+    QCheckBox,
+    QHeaderView,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QProgressBar,
+    QRadioButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWizard,
+    QWizardPage,
+)
+
+from sj_generator.ai.client import LlmClient
+from sj_generator.ai.explanations import ExplanationInputs, generate_explanation
+from sj_generator.config import load_deepseek_config, to_analysis_llm_config
+from sj_generator.io.excel_repo import load_questions, save_questions
+from sj_generator.models import Question
+from sj_generator.ui.state import WizardState
+from sj_generator.ui.constants import PAGE_AI_ANALYSIS, PAGE_EXPORT, PAGE_NAME
+
+
+def _common_mistakes_md_path(root_dir: Path) -> Path:
+    return root_dir / "common_mistakes" / "选择题常见错题归因与答题策略分析.md"
+
+
+class AiAnalysisOptionPage(QWizardPage):
+    def __init__(self, state: WizardState) -> None:
+        super().__init__()
+        self._state = state
+        self.setTitle("解析选项")
+
+        self._yes_radio = QRadioButton("生成解析")
+        self._no_radio = QRadioButton("跳过解析生成")
+        self._yes_radio.setChecked(True)
+
+        root_dir = Path(__file__).resolve().parents[3]
+        ref_dir = root_dir / "reference"
+        ref_mds = sorted([p for p in ref_dir.glob("*.md")] if ref_dir.exists() else [], key=lambda p: p.name)
+        has_reference_mds = len(ref_mds) > 0
+        self._ref_folder_checkbox = QCheckBox("自动参考 reference 文件夹内所有 md（如果存在）")
+        self._ref_folder_checkbox.setChecked(has_reference_mds)
+        self._ref_folder_checkbox.setEnabled(has_reference_mds)
+
+        has_mistakes = _common_mistakes_md_path(root_dir).exists()
+        self._mistakes_checkbox = QCheckBox("使用常见错题归因参考（如果存在）")
+        self._mistakes_checkbox.setChecked(has_mistakes)
+        self._mistakes_checkbox.setEnabled(has_mistakes)
+
+        hint = QLabel("选择“生成解析”后，将在下一步自动生成缺失解析并写回题库。")
+        hint.setWordWrap(True)
+
+        layout = QVBoxLayout()
+        layout.addWidget(self._yes_radio)
+        layout.addWidget(self._no_radio)
+        layout.addWidget(self._ref_folder_checkbox)
+        layout.addWidget(self._mistakes_checkbox)
+        layout.addWidget(hint)
+        layout.addStretch(1)
+        self.setLayout(layout)
+
+    def initializePage(self) -> None:
+        if self._state.analysis_enabled:
+            self._yes_radio.setChecked(True)
+        else:
+            self._no_radio.setChecked(True)
+        root_dir = Path(__file__).resolve().parents[3]
+        ref_dir = root_dir / "reference"
+        has_reference_mds = any(ref_dir.glob("*.md")) if ref_dir.exists() else False
+        self._ref_folder_checkbox.setEnabled(has_reference_mds)
+        if not has_reference_mds:
+            self._ref_folder_checkbox.setChecked(False)
+        else:
+            self._ref_folder_checkbox.setChecked(self._state.analysis_use_reference_folder)
+        has_mistakes = _common_mistakes_md_path(root_dir).exists()
+        self._mistakes_checkbox.setEnabled(has_mistakes)
+        if not has_mistakes:
+            self._mistakes_checkbox.setChecked(False)
+        else:
+            self._mistakes_checkbox.setChecked(self._state.analysis_include_common_mistakes)
+        self._sync_enabled_state()
+        self._yes_radio.toggled.connect(self._sync_enabled_state)
+
+    def _sync_enabled_state(self) -> None:
+        enabled = self._yes_radio.isChecked()
+        root_dir = Path(__file__).resolve().parents[3]
+        ref_dir = root_dir / "reference"
+        has_reference_mds = any(ref_dir.glob("*.md")) if ref_dir.exists() else False
+        self._ref_folder_checkbox.setEnabled(enabled and has_reference_mds)
+        root_dir = Path(__file__).resolve().parents[3]
+        has_mistakes = _common_mistakes_md_path(root_dir).exists()
+        self._mistakes_checkbox.setEnabled(enabled and has_mistakes)
+
+    def validatePage(self) -> bool:
+        self._state.analysis_enabled = self._yes_radio.isChecked()
+        root_dir = Path(__file__).resolve().parents[3]
+        ref_dir = root_dir / "reference"
+        has_reference_mds = any(ref_dir.glob("*.md")) if ref_dir.exists() else False
+        self._state.analysis_use_reference_folder = (
+            self._ref_folder_checkbox.isChecked() and has_reference_mds and self._state.analysis_enabled
+        )
+        has_mistakes = _common_mistakes_md_path(root_dir).exists()
+        self._state.analysis_include_common_mistakes = (
+            self._mistakes_checkbox.isChecked() and has_mistakes and self._state.analysis_enabled
+        )
+        return True
+
+    def nextId(self) -> int:
+        if self._state.analysis_enabled:
+            return PAGE_AI_ANALYSIS
+        if self._state.input_mode == "manual" and self._state.project_name_is_placeholder:
+            return PAGE_NAME
+        return PAGE_EXPORT
+
+
+class AiAnalysisPage(QWizardPage):
+    def __init__(self, state: WizardState) -> None:
+        super().__init__()
+        self._state = state
+        self.setTitle("AI 生成解析")
+
+        self._status_label = QLabel("")
+        self._status_label.setWordWrap(True)
+
+        self._table = QTableWidget()
+        self._table.setColumnCount(6)
+        self._table.setHorizontalHeaderLabels(["编号", "题目", "选项", "答案", "解析", "解析用时"])
+        self._table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self._table.setRowCount(0)
+        self._table.setColumnHidden(0, True)
+
+        self._progress = QProgressBar()
+        self._progress.setRange(0, 0)
+        self._progress.setValue(0)
+
+        self._stop_btn = QPushButton("停止生成")
+        self._stop_btn.clicked.connect(self._stop)
+        self._stop_btn.setEnabled(False)
+
+        self._retry_btn = QPushButton("重试")
+        self._retry_btn.clicked.connect(self._retry)
+        self._retry_btn.setEnabled(False)
+
+        progress_row = QHBoxLayout()
+        progress_row.addWidget(self._progress, 1)
+        progress_row.addWidget(self._stop_btn)
+        progress_row.addWidget(self._retry_btn)
+
+        layout = QVBoxLayout()
+        layout.addWidget(self._status_label)
+        layout.addLayout(progress_row)
+        layout.addWidget(self._table, 3)
+        self.setLayout(layout)
+        self._thread: QThread | None = None
+        self._worker: _AiAnalysisWorker | None = None
+        self._running = False
+        self._done = False
+        self._tasks: list[tuple[int, str, str]] = []
+        self._failed_rows: set[int] = set()
+        self._refresh_status()
+
+    def initializePage(self) -> None:
+        self._thread = None
+        self._worker = None
+        self._running = False
+        self._done = False
+        self._tasks = []
+        self._failed_rows = set()
+        self._stop_btn.setEnabled(False)
+        self._retry_btn.setEnabled(False)
+        self._load_repo()
+        self._refresh_status()
+        self._prepare_tasks()
+        if self._tasks and (not self._done) and (not self._running):
+            QTimer.singleShot(0, self._start_generation)
+
+    def nextId(self) -> int:
+        if self._state.input_mode == "manual" and self._state.project_name_is_placeholder:
+            return PAGE_NAME
+        return PAGE_EXPORT
+
+    def isComplete(self) -> bool:
+        return self._done and (not self._running)
+
+    def validatePage(self) -> bool:
+        return (not self._running) and self._done
+
+    def _refresh_status(self) -> None:
+        self._stop_btn.setEnabled(self._running)
+        self._retry_btn.setEnabled((not self._running) and bool(self._tasks))
+
+    def _load_repo(self) -> None:
+        repo = self._state.repo_path
+        if repo is None:
+            return
+        try:
+            questions = load_questions(repo)
+        except Exception as e:
+            QMessageBox.critical(self, "读取失败", str(e))
+            return
+        self._table.setRowCount(len(questions))
+        for r, q in enumerate(questions):
+            self._table.setItem(r, 0, QTableWidgetItem(q.number or ""))
+            self._table.setItem(r, 1, QTableWidgetItem(q.stem or ""))
+            self._table.setItem(r, 2, QTableWidgetItem(q.options or ""))
+            self._table.setItem(r, 3, QTableWidgetItem(q.answer or ""))
+            self._table.setItem(r, 4, QTableWidgetItem(q.analysis or ""))
+            self._table.setItem(r, 5, QTableWidgetItem(""))
+
+    def _build_inputs_for_row(self, row: int) -> tuple[str, str]:
+        stem = self._table.item(row, 1).text() if self._table.item(row, 1) else ""
+        options = self._table.item(row, 2).text() if self._table.item(row, 2) else ""
+        answer = self._table.item(row, 3).text() if self._table.item(row, 3) else ""
+        question_text = stem.strip()
+        if options.strip():
+            question_text = (question_text + "\n" + options.strip()).strip()
+        return question_text, answer.strip()
+
+    def _collect_tasks(self) -> list[tuple[int, str, str]]:
+        tasks: list[tuple[int, str, str]] = []
+        for r in range(self._table.rowCount()):
+            analysis = self._table.item(r, 4).text().strip() if self._table.item(r, 4) else ""
+            if analysis:
+                continue
+            qtext, atext = self._build_inputs_for_row(r)
+            if qtext and atext:
+                tasks.append((r, qtext, atext))
+        return tasks
+
+    def _prepare_tasks(self) -> None:
+        self._tasks = self._collect_tasks()
+        self._progress.setRange(0, len(self._tasks) if self._tasks else 0)
+        self._progress.setValue(0)
+        w = self.wizard()
+        if isinstance(w, QWizard):
+            w.setButtonText(QWizard.WizardButton.NextButton, "下一步")
+        if not self._tasks:
+            self._status_label.setText("无需生成解析。")
+            self._done = True
+            self.completeChanged.emit()
+        else:
+            self._status_label.setText("进入本页后将自动开始生成解析。")
+
+    def cleanupPage(self) -> None:
+        w = self.wizard()
+        if isinstance(w, QWizard):
+            w.setButtonText(QWizard.WizardButton.NextButton, "下一步")
+
+    def _start_generation(self) -> None:
+        if self._running or self._done:
+            return
+
+        cfg = load_deepseek_config()
+        if not cfg.is_ready():
+            QMessageBox.warning(self, "未配置", "请先在配置文件中填写 API Key。")
+            self._status_label.setText("未配置：无法开始生成解析。")
+            w = self.wizard()
+            if isinstance(w, QWizard):
+                w.setButtonText(QWizard.WizardButton.NextButton, "下一步")
+            self.completeChanged.emit()
+            return
+
+        repo = self._state.repo_path
+        if repo is None:
+            return
+
+        root_dir = Path(__file__).resolve().parents[3]
+        ref_paths: list[Path] = []
+        if self._state.analysis_use_reference_folder:
+            ref_dir = root_dir / "reference"
+            if ref_dir.exists():
+                ref_paths = sorted([p for p in ref_dir.glob("*.md")], key=lambda p: p.name)
+        tasks = self._tasks
+        if not tasks:
+            self._done = True
+            self.completeChanged.emit()
+            return
+
+        if self._thread is not None and self._thread.isRunning():
+            return
+
+        self._running = True
+        self.completeChanged.emit()
+        self._stop_btn.setEnabled(True)
+        self._retry_btn.setEnabled(False)
+        self._progress.setRange(0, len(tasks))
+        self._progress.setValue(0)
+        self._status_label.setText("批量生成：准备开始…")
+        w = self.wizard()
+        if isinstance(w, QWizard):
+            w.setButtonText(QWizard.WizardButton.NextButton, "生成中…")
+
+        thread = QThread(self)
+        worker = _AiAnalysisWorker(
+            cfg=cfg,
+            tasks=tasks,
+            reference_md_paths=ref_paths,
+            include_common_mistakes=self._state.analysis_include_common_mistakes,
+            root_dir=root_dir,
+        )
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress.connect(self._on_batch_progress)
+        worker.row_done.connect(self._on_batch_row_done)
+        worker.row_failed.connect(self._on_batch_row_failed)
+        worker.done.connect(self._on_batch_done)
+        worker.error.connect(self._on_batch_error)
+        worker.done.connect(thread.quit)
+        worker.error.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        self._thread = thread
+        self._worker = worker
+        thread.start()
+
+    def _stop(self) -> None:
+        if self._worker is None:
+            return
+        self._worker.request_stop()
+        self._stop_btn.setEnabled(False)
+        self._status_label.setText("正在停止…")
+
+    def _on_batch_progress(self, cur: int, total: int) -> None:
+        self._progress.setRange(0, total)
+        self._progress.setValue(max(0, min(cur, total)))
+        self._status_label.setText(f"批量生成：{cur}/{total}")
+
+    def _on_batch_row_done(self, row: int, text: str, elapsed_s: float) -> None:
+        existing = self._table.item(row, 4).text().strip() if self._table.item(row, 4) else ""
+        if existing:
+            return
+        if row in self._failed_rows:
+            self._failed_rows.remove(row)
+        self._table.setItem(row, 4, QTableWidgetItem(text))
+        self._table.setItem(row, 5, QTableWidgetItem(f"{elapsed_s:.1f}s"))
+
+    def _on_batch_row_failed(self, row: int, msg: str) -> None:
+        self._failed_rows.add(row)
+        row_no = row + 1
+        self._status_label.setText(f"第 {row_no} 行生成失败：{msg}")
+
+    def _on_batch_done(self, stopped: bool) -> None:
+        repo = self._state.repo_path
+        if repo is None:
+            self._running = False
+            self._thread = None
+            self._worker = None
+            self._refresh_status()
+            self._done = True
+            self.completeChanged.emit()
+            return
+
+        self._status_label.setText("批量生成：写回题库…")
+        questions: list[Question] = []
+        for r in range(self._table.rowCount()):
+            number = self._table.item(r, 0).text().strip() if self._table.item(r, 0) else ""
+            stem = self._table.item(r, 1).text().strip() if self._table.item(r, 1) else ""
+            options = self._table.item(r, 2).text().strip() if self._table.item(r, 2) else ""
+            answer = self._table.item(r, 3).text().strip() if self._table.item(r, 3) else ""
+            analysis = self._table.item(r, 4).text().strip() if self._table.item(r, 4) else ""
+            if not any([number, stem, options, answer, analysis]):
+                continue
+            questions.append(Question(number=number, stem=stem, options=options, answer=answer, analysis=analysis))
+
+        try:
+            save_questions(repo, questions)
+        except Exception as e:
+            QMessageBox.critical(self, "写回失败", str(e))
+            self._running = False
+            self._thread = None
+            self._worker = None
+            self._refresh_status()
+            self.completeChanged.emit()
+            return
+
+        self._progress.setValue(self._progress.maximum())
+        self._tasks = self._collect_tasks()
+        pending = len(self._tasks)
+        failed = len(self._failed_rows)
+        if pending > 0:
+            self._status_label.setText(
+                (
+                    f"已停止生成（剩余 {pending} 题可重试，失败 {failed} 题）。"
+                    if stopped
+                    else f"批量生成完成（剩余 {pending} 题可重试，失败 {failed} 题）。"
+                )
+            )
+        else:
+            self._status_label.setText(
+                (f"已停止生成（失败 {failed} 题）。" if stopped else f"批量生成完成（失败 {failed} 题）。")
+                if failed > 0
+                else ("已停止生成。" if stopped else "批量生成完成。")
+            )
+        self._running = False
+        self._done = True
+        self._thread = None
+        self._worker = None
+        self._refresh_status()
+        w = self.wizard()
+        if isinstance(w, QWizard):
+            w.setButtonText(QWizard.WizardButton.NextButton, "下一步")
+        self.completeChanged.emit()
+
+    def _on_batch_error(self, msg: str) -> None:
+        QMessageBox.critical(self, "生成失败", msg)
+        self._status_label.setText("生成失败。")
+        self._running = False
+        self._done = False
+        self._thread = None
+        self._worker = None
+        self._tasks = self._collect_tasks()
+        self._refresh_status()
+        w = self.wizard()
+        if isinstance(w, QWizard):
+            w.setButtonText(QWizard.WizardButton.NextButton, "下一步")
+        self.completeChanged.emit()
+
+    def _retry(self) -> None:
+        if self._running:
+            return
+        self._tasks = self._collect_tasks()
+        if self._tasks:
+            self._progress.setRange(0, len(self._tasks))
+            self._progress.setValue(0)
+            self._done = False
+            self._refresh_status()
+            self._status_label.setText("准备重试生成解析…")
+            QTimer.singleShot(0, self._start_generation)
+
+
+class _AiAnalysisWorker(QObject):
+    progress = pyqtSignal(int, int)
+    row_done = pyqtSignal(int, str, float)
+    row_failed = pyqtSignal(int, str)
+    done = pyqtSignal(bool)
+    error = pyqtSignal(str)
+
+    def __init__(
+        self,
+        *,
+        cfg,
+        tasks: list[tuple[int, str, str]],
+        reference_md_paths: list[Path],
+        include_common_mistakes: bool,
+        root_dir: Path,
+    ) -> None:
+        super().__init__()
+        self._cfg = cfg
+        self._tasks = tasks
+        self._reference_md_paths = reference_md_paths
+        self._include_common_mistakes = include_common_mistakes
+        self._root_dir = root_dir
+        self._stop = False
+
+    def request_stop(self) -> None:
+        self._stop = True
+
+    def run(self) -> None:
+        try:
+            client = LlmClient(to_analysis_llm_config(self._cfg))
+            total = len(self._tasks)
+            done_count = 0
+            for row, qtext, atext in self._tasks:
+                if self._stop:
+                    break
+                try:
+                    started_at = time.perf_counter()
+                    inp = ExplanationInputs(
+                        question_text=qtext,
+                        answer_text=atext,
+                        reference_md_paths=self._reference_md_paths,
+                        include_common_mistakes=self._include_common_mistakes,
+                        root_dir=self._root_dir,
+                    )
+                    text = generate_explanation(client, inp)
+                    elapsed_s = time.perf_counter() - started_at
+                except Exception as e:
+                    self.row_failed.emit(row, str(e))
+                    done_count += 1
+                    self.progress.emit(done_count, total)
+                    continue
+                self.row_done.emit(row, text, elapsed_s)
+                done_count += 1
+                self.progress.emit(done_count, total)
+            self.done.emit(self._stop)
+        except Exception as e:
+            self.error.emit(str(e))
