@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (
 )
 
 from sj_generator.ai.client import LlmClient
-from sj_generator.ai.import_questions import import_questions_from_sources
+from sj_generator.ai.import_questions import _fingerprint_question_obj, import_questions_from_sources
 from sj_generator.config import (
     load_deepseek_config,
     load_kimi_config,
@@ -31,8 +31,8 @@ from sj_generator.config import (
 from sj_generator.io.excel_repo import append_questions
 from sj_generator.io.source_reader import read_source_text
 from sj_generator.models import Question
-from sj_generator.ui.compare_highlight import compare_highlight_model_keys
-from sj_generator.ui.state import WizardState
+from sj_generator.ui.compare_highlight import compare_highlight_model_styles
+from sj_generator.ui.state import WizardState, normalize_ai_concurrency
 from sj_generator.ui.constants import PAGE_AI_IMPORT, PAGE_AI_IMPORT_EDIT, PAGE_DEDUPE_OPTION
 
 
@@ -351,6 +351,7 @@ class AiImportPage(QWizardPage):
             cfg=cfg,
             paths=paths,
             strategy="per_question",
+            max_question_workers=normalize_ai_concurrency(self._state.ai_concurrency),
         )
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
@@ -510,20 +511,16 @@ class AiImportPage(QWizardPage):
             if item is not None:
                 item.setBackground(QBrush())
 
-    def _canonical_obj_text(self, obj: object) -> str:
+    def _highlight_sig_text(self, obj: object) -> str:
+        if isinstance(obj, dict):
+            return _fingerprint_question_obj(obj)
         if obj is None:
             return ""
         if isinstance(obj, str):
-            s = obj.strip()
-            return s
-        if isinstance(obj, dict) and not obj:
-            return ""
+            return obj.strip()
         if isinstance(obj, list) and not obj:
             return ""
-        try:
-            return json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        except Exception:
-            return str(obj).strip()
+        return str(obj).strip()
 
     def _format_payload_cell(self, value: object) -> str:
         if value is None:
@@ -536,19 +533,26 @@ class AiImportPage(QWizardPage):
     def _apply_partial_pass_highlight(self, *, row: int, payload: dict[str, object]) -> None:
         self._clear_compare_cell_bg(row)
         model_cols = [("deepseek", 5), ("kimi", 6), ("qwen", 7)]
-        highlight_keys = compare_highlight_model_keys(
-            model_sigs={key: self._canonical_obj_text(payload.get(key)) for key, _ in model_cols},
+        highlight_styles = compare_highlight_model_styles(
+            model_sigs={key: self._highlight_sig_text(payload.get(key)) for key, _ in model_cols},
             round_no=int(payload.get("round") or 0),
             round_matched_count=int(payload.get("round_matched_count") or 0),
         )
-        if not highlight_keys:
+        if not highlight_styles:
             return
         fail_brush = QBrush(QColor(255, 199, 206))
+        empty_brush = QBrush(QColor(255, 235, 156))
         for key, col in model_cols:
-            if key in highlight_keys:
-                item = self._detail_table.item(row, col)
-                if item is not None:
-                    item.setBackground(fail_brush)
+            style = highlight_styles.get(key)
+            if not style:
+                continue
+            item = self._detail_table.item(row, col)
+            if item is None:
+                continue
+            if style == "yellow":
+                item.setBackground(empty_brush)
+            elif style == "red":
+                item.setBackground(fail_brush)
 
     def _build_compare_verdict(self, payload: dict[str, object]) -> str:
         round_no = int(payload.get("round") or 0)
@@ -703,11 +707,12 @@ class _AiImportWorker(QObject):
     done = pyqtSignal(int)
     error = pyqtSignal(str)
 
-    def __init__(self, *, cfg, paths: list[Path], strategy: str) -> None:
+    def __init__(self, *, cfg, paths: list[Path], strategy: str, max_question_workers: int) -> None:
         super().__init__()
         self._cfg = cfg
         self._paths = paths
         self._strategy = strategy
+        self._max_question_workers = normalize_ai_concurrency(max_question_workers)
         self._stop = False
 
     def request_stop(self) -> None:
@@ -730,8 +735,12 @@ class _AiImportWorker(QObject):
                 client=client,
                 kimi_client=kimi_client,
                 qwen_client=qwen_client,
+                client_factory=lambda: LlmClient(to_llm_config(self._cfg)),
+                kimi_client_factory=lambda: LlmClient(to_kimi_llm_config(kimi_cfg)),
+                qwen_client_factory=lambda: LlmClient(to_qwen_llm_config(qwen_cfg)),
                 sources=sources,
                 strategy=self._strategy,
+                max_question_workers=self._max_question_workers,
                 progress_cb=self.progress.emit,
                 question_cb=self._emit_question,
                 compare_cb=self._emit_compare,

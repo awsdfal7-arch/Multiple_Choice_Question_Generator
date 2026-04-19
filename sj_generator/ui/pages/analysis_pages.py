@@ -20,10 +20,11 @@ from PyQt6.QtWidgets import (
 
 from sj_generator.ai.client import LlmClient
 from sj_generator.ai.explanations import ExplanationInputs, generate_explanation
+from sj_generator.ai.task_runner import run_tasks_in_parallel
 from sj_generator.config import load_deepseek_config, to_analysis_llm_config
 from sj_generator.io.excel_repo import load_questions, save_questions
 from sj_generator.models import Question
-from sj_generator.ui.state import WizardState
+from sj_generator.ui.state import WizardState, normalize_ai_concurrency
 from sj_generator.ui.constants import PAGE_AI_ANALYSIS, PAGE_EXPORT, PAGE_NAME
 
 
@@ -319,6 +320,7 @@ class AiAnalysisPage(QWizardPage):
             reference_md_paths=ref_paths,
             include_common_mistakes=self._state.analysis_include_common_mistakes,
             root_dir=root_dir,
+            max_workers=normalize_ai_concurrency(self._state.ai_concurrency),
         )
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
@@ -354,7 +356,8 @@ class AiAnalysisPage(QWizardPage):
         self._current_task_no = current
         self._total_task_count = total
         self._status_label.setText(self._build_running_status())
-        self._current_label.setText(f"选择题 {current}/{total} 题解析中")
+        workers = normalize_ai_concurrency(self._state.ai_concurrency)
+        self._current_label.setText(f"选择题 {current}/{total} 题已发起解析（并发 {workers} 路）")
 
     def _on_batch_row_done(self, row: int, text: str, elapsed_s: float) -> None:
         existing = self._table.item(row, 4).text().strip() if self._table.item(row, 4) else ""
@@ -477,10 +480,11 @@ class AiAnalysisPage(QWizardPage):
         total = self._total_task_count
         current = self._current_task_no
         completed = self._completed_task_count
+        workers = normalize_ai_concurrency(self._state.ai_concurrency)
         if total > 0 and current > 0:
-            return f"选择题 {current}/{total} 题解析中，已完成 {completed}/{total}"
+            return f"批量生成：并发 {workers} 路，已发起 {current}/{total}，已完成 {completed}/{total}"
         if total > 0:
-            return f"批量生成：已完成 {completed}/{total}"
+            return f"批量生成：并发 {workers} 路，已完成 {completed}/{total}"
         return "批量生成中…"
 
 
@@ -500,6 +504,7 @@ class _AiAnalysisWorker(QObject):
         reference_md_paths: list[Path],
         include_common_mistakes: bool,
         root_dir: Path,
+        max_workers: int,
     ) -> None:
         super().__init__()
         self._cfg = cfg
@@ -507,6 +512,7 @@ class _AiAnalysisWorker(QObject):
         self._reference_md_paths = reference_md_paths
         self._include_common_mistakes = include_common_mistakes
         self._root_dir = root_dir
+        self._max_workers = normalize_ai_concurrency(max_workers)
         self._stop = False
 
     def request_stop(self) -> None:
@@ -514,32 +520,54 @@ class _AiAnalysisWorker(QObject):
 
     def run(self) -> None:
         try:
-            client = LlmClient(to_analysis_llm_config(self._cfg))
             total = len(self._tasks)
             done_count = 0
-            for row, qtext, atext in self._tasks:
-                if self._stop:
-                    break
-                self.processing.emit(done_count + 1, total)
-                try:
-                    started_at = time.perf_counter()
-                    inp = ExplanationInputs(
-                        question_text=qtext,
-                        answer_text=atext,
-                        reference_md_paths=self._reference_md_paths,
-                        include_common_mistakes=self._include_common_mistakes,
-                        root_dir=self._root_dir,
-                    )
-                    text = generate_explanation(client, inp)
-                    elapsed_s = time.perf_counter() - started_at
-                except Exception as e:
-                    self.row_failed.emit(row, str(e))
-                    done_count += 1
-                    self.progress.emit(done_count, total)
-                    continue
+            
+            def run_one(task: tuple[int, str, str]) -> tuple[str, float]:
+                _, qtext, atext = task
+                client = LlmClient(to_analysis_llm_config(self._cfg))
+                started_at = time.perf_counter()
+                inp = ExplanationInputs(
+                    question_text=qtext,
+                    answer_text=atext,
+                    reference_md_paths=self._reference_md_paths,
+                    include_common_mistakes=self._include_common_mistakes,
+                    root_dir=self._root_dir,
+                )
+                text = generate_explanation(client, inp)
+                elapsed_s = time.perf_counter() - started_at
+                return text, elapsed_s
+
+            def on_task_start(current: int, total_count: int, task: tuple[int, str, str]) -> None:
+                self.processing.emit(current, total_count)
+
+            def on_task_done(task: tuple[int, str, str], result: tuple[str, float]) -> None:
+                nonlocal done_count
+                row, _, _ = task
+                text, elapsed_s = result
                 self.row_done.emit(row, text, elapsed_s)
                 done_count += 1
                 self.progress.emit(done_count, total)
+
+            def on_task_failed(task: tuple[int, str, str], exc: Exception) -> None:
+                nonlocal done_count
+                row, _, _ = task
+                self.row_failed.emit(row, str(exc))
+                done_count += 1
+                self.progress.emit(done_count, total)
+
+            run_tasks_in_parallel(
+                tasks=self._tasks,
+                max_workers=self._max_workers,
+                stop_cb=self._should_stop,
+                on_task_start=on_task_start,
+                on_task_done=on_task_done,
+                on_task_failed=on_task_failed,
+                run_one=run_one,
+            )
             self.done.emit(self._stop)
         except Exception as e:
             self.error.emit(str(e))
+
+    def _should_stop(self) -> bool:
+        return self._stop

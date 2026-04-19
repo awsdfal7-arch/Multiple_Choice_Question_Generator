@@ -5,6 +5,16 @@ from typing import Optional
 from sj_generator.io.dedupe import DedupeHit
 from sj_generator.models import Question
 
+AI_CONCURRENCY_OPTIONS = (1, 3, 5)
+
+
+def normalize_ai_concurrency(value: int | None) -> int:
+    try:
+        workers = int(value or 0)
+    except Exception:
+        workers = 0
+    return workers if workers in AI_CONCURRENCY_OPTIONS else 3
+
 
 @dataclass
 class WizardState:
@@ -28,3 +38,4 @@ class WizardState:
     analysis_use_reference_md: bool = False
     analysis_reference_md_path_text: str = ""
     analysis_include_common_mistakes: bool = True
+    ai_concurrency: int = 3

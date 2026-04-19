@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 from datetime import date
+import threading
+import time
 
 from openpyxl import Workbook, load_workbook
 
 from sj_generator.ai import import_questions as iq
 from sj_generator.ai.import_questions import ImportResult
+from sj_generator.ai.task_runner import run_tasks_in_parallel
 from sj_generator.io import batch_ai_import as batch_ai
 from sj_generator.io.batch_folderize import process_excel_to_folder_mode
 from sj_generator.io.export_md import _normalize_numbers
 from sj_generator.models import Question
 from sj_generator import config as cfg_mod
-from sj_generator.ui.compare_highlight import compare_highlight_model_keys
+from sj_generator.ui.compare_highlight import compare_highlight_model_styles
+from sj_generator.ui.state import normalize_ai_concurrency
 
 
 def test_normalize_numbers_fill_after_existing_max() -> None:
@@ -98,39 +102,111 @@ def test_deepseek_analysis_model_defaults_and_persists(monkeypatch, tmp_path) ->
 
 
 def test_compare_highlight_marks_minority_model() -> None:
-    got = compare_highlight_model_keys(
+    got = compare_highlight_model_styles(
         model_sigs={"deepseek": '{"answer":"A"}', "kimi": '{"answer":"A"}', "qwen": '{"answer":"B"}'},
         round_no=1,
         round_matched_count=2,
     )
-    assert got == {"qwen"}
+    assert got == {"qwen": "red"}
 
 
 def test_compare_highlight_marks_all_when_first_round_failed() -> None:
-    got = compare_highlight_model_keys(
+    got = compare_highlight_model_styles(
         model_sigs={"deepseek": '{"answer":"A"}', "kimi": "", "qwen": '{"answer":"B"}'},
         round_no=1,
         round_matched_count=1,
     )
-    assert got == {"deepseek", "kimi", "qwen"}
+    assert got == {"deepseek": "red", "kimi": "yellow", "qwen": "red"}
 
 
 def test_compare_highlight_skips_when_first_round_all_passed() -> None:
-    got = compare_highlight_model_keys(
+    got = compare_highlight_model_styles(
         model_sigs={"deepseek": '{"answer":"A"}', "kimi": '{"answer":"A"}', "qwen": '{"answer":"A"}'},
         round_no=1,
         round_matched_count=3,
     )
-    assert got == set()
+    assert got == {}
 
 
-def test_compare_highlight_skips_non_first_round() -> None:
-    got = compare_highlight_model_keys(
+def test_compare_highlight_marks_non_first_round_minority_model() -> None:
+    got = compare_highlight_model_styles(
         model_sigs={"deepseek": '{"answer":"A"}', "kimi": "", "qwen": '{"answer":"A"}'},
         round_no=2,
         round_matched_count=2,
     )
-    assert got == set()
+    assert got == {"kimi": "yellow"}
+
+
+def test_compare_highlight_marks_all_non_empty_models_red_when_all_different() -> None:
+    got = compare_highlight_model_styles(
+        model_sigs={"deepseek": '{"answer":"A"}', "kimi": '{"answer":"B"}', "qwen": '{"answer":"C"}'},
+        round_no=2,
+        round_matched_count=1,
+    )
+    assert got == {"deepseek": "red", "kimi": "red", "qwen": "red"}
+
+
+def test_compare_highlight_uses_same_fingerprint_semantics_as_verdict() -> None:
+    deepseek = iq._normalize_question_obj_for_view(
+        {"number": "1", "stem": "1. 题目一", "options": "A.甲\nB.乙", "answer": "a"}
+    )
+    kimi = iq._normalize_question_obj_for_view(
+        {"number": "", "stem": "题目一", "options": "A.甲\nB.乙", "answer": "A"}
+    )
+    qwen = iq._normalize_question_obj_for_view(
+        {"number": "3", "stem": "题目一", "options": "A. 丙\nB. 丁", "answer": "B"}
+    )
+    got = compare_highlight_model_styles(
+        model_sigs={
+            "deepseek": iq._fingerprint_question_obj(deepseek),
+            "kimi": iq._fingerprint_question_obj(kimi),
+            "qwen": iq._fingerprint_question_obj(qwen),
+        },
+        round_no=1,
+        round_matched_count=2,
+    )
+    assert got == {"qwen": "red"}
+
+
+def test_run_analysis_tasks_supports_three_way_concurrency() -> None:
+    tasks = [(i, f"题目{i}", "A") for i in range(5)]
+    lock = threading.Lock()
+    active = 0
+    max_active = 0
+    started: list[int] = []
+    completed: list[int] = []
+
+    def run_one(task: tuple[int, str, str]) -> int:
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.05)
+        with lock:
+            active -= 1
+        return task[0]
+
+    run_tasks_in_parallel(
+        tasks=tasks,
+        max_workers=3,
+        stop_cb=lambda: False,
+        on_task_start=lambda current, total, task: started.append(current),
+        on_task_done=lambda task, result: completed.append(result),
+        on_task_failed=lambda task, exc: (_ for _ in ()).throw(exc),
+        run_one=run_one,
+    )
+
+    assert started == [1, 2, 3, 4, 5]
+    assert sorted(completed) == [0, 1, 2, 3, 4]
+    assert max_active == 3
+
+
+def test_normalize_ai_concurrency_keeps_allowed_values_and_falls_back() -> None:
+    assert normalize_ai_concurrency(1) == 1
+    assert normalize_ai_concurrency(3) == 3
+    assert normalize_ai_concurrency(5) == 5
+    assert normalize_ai_concurrency(2) == 3
+    assert normalize_ai_concurrency(None) == 3
 
 
 def test_process_excel_to_folder_mode_supports_legacy_headers(tmp_path) -> None:
