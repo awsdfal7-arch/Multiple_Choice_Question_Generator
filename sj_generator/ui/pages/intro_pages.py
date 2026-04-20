@@ -6,6 +6,7 @@ import random
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPixmap, QTextBlockFormat, QTextCharFormat, QTextCursor
 from PyQt6.QtWidgets import (
+    QApplication,
     QFormLayout,
     QFrame,
     QHBoxLayout,
@@ -67,17 +68,10 @@ def _load_quote_content() -> tuple[str, str, Path | None]:
 class IntroPage(QWizardPage):
     def __init__(self) -> None:
         super().__init__()
-        self.setTitle("引言")
+        self.setTitle("登录")
 
         quote_text, author_name, photo_path = _load_quote_content()
         self._photo_path = photo_path
-
-        title_label = QLabel("思政智题云枢")
-        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title_label.setStyleSheet("font-size: 28px; font-weight: 700;")
-
-        photo_title = QLabel("名人照片")
-        photo_title.setStyleSheet("font-size: 16px; font-weight: 600;")
 
         self._photo_label = QLabel()
         self._photo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -115,28 +109,39 @@ class IntroPage(QWizardPage):
         author_label = QLabel(f"—— {author_name}")
         author_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         author_label.setStyleSheet(
-            "font-size: 20px; color: #7a0000; "
+            "font-size: 20px; color: #000000; "
             "font-family: 'KaiTi', 'STKaiti', 'SimSun', 'Songti SC';"
         )
 
         username_edit = QLineEdit()
-        username_edit.setPlaceholderText("用户名可任意填写")
+        username_edit.setPlaceholderText("请输入用户名")
         username_edit.setMinimumHeight(36)
 
         password_edit = QLineEdit()
-        password_edit.setPlaceholderText("密码可任意填写")
+        password_edit.setPlaceholderText("请输入密码")
         password_edit.setEchoMode(QLineEdit.EchoMode.Password)
         password_edit.setMinimumHeight(36)
         password_edit.returnPressed.connect(self._go_next)
 
-        login_hint = QLabel("演示登录：用户名和密码不做校验，点击即可进入程序。")
-        login_hint.setWordWrap(True)
-        login_hint.setStyleSheet("color: #666666; font-size: 13px;")
+        btn_style = "font-size: 16px; font-weight: 600; padding: 6px 18px;"
 
-        login_btn = QPushButton("登录进入系统")
-        login_btn.setMinimumHeight(44)
-        login_btn.setStyleSheet("font-size: 16px; font-weight: 600; padding: 6px 18px;")
-        login_btn.clicked.connect(self._go_next)
+        user_login_btn = QPushButton("用户登录")
+        user_login_btn.setMinimumHeight(44)
+        user_login_btn.setStyleSheet(btn_style)
+        user_login_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        user_login_btn.clicked.connect(self._go_next)
+
+        local_login_btn = QPushButton("本地登录")
+        local_login_btn.setMinimumHeight(44)
+        local_login_btn.setStyleSheet(btn_style)
+        local_login_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        local_login_btn.clicked.connect(self._go_next)
+
+        exit_btn = QPushButton("退出程序")
+        exit_btn.setMinimumHeight(44)
+        exit_btn.setStyleSheet(btn_style)
+        exit_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        exit_btn.clicked.connect(self._exit_program)
 
         login_form = QFormLayout()
         login_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -147,19 +152,24 @@ class IntroPage(QWizardPage):
         login_form.addRow("密  码：", password_edit)
 
         login_panel = QFrame()
-        login_panel.setStyleSheet("QFrame { border: 1px solid #d9d9d9; border-radius: 8px; background: #fafafa; }")
+        login_panel.setStyleSheet("QFrame { border: none; background: #fafafa; }")
         login_layout = QVBoxLayout()
         login_layout.setContentsMargins(20, 18, 20, 18)
         login_layout.setSpacing(12)
-        login_layout.addWidget(QLabel("系统登录"))
-        login_layout.itemAt(login_layout.count() - 1).widget().setStyleSheet("font-size: 18px; font-weight: 600;")
+        login_title = QLabel("思政智题云枢系统登陆")
+        login_title.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
+        login_title.setStyleSheet("font-size: 18px; font-weight: 600;")
+        login_layout.addWidget(login_title)
         login_layout.addLayout(login_form)
-        login_layout.addWidget(login_hint)
-        login_layout.addWidget(login_btn, alignment=Qt.AlignmentFlag.AlignHCenter)
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
+        btn_row.addWidget(user_login_btn)
+        btn_row.addWidget(local_login_btn)
+        btn_row.addWidget(exit_btn)
+        login_layout.addLayout(btn_row)
         login_panel.setLayout(login_layout)
 
         photo_layout = QVBoxLayout()
-        photo_layout.addWidget(photo_title)
         photo_layout.addWidget(self._photo_label, 1)
 
         quote_layout = QVBoxLayout()
@@ -178,8 +188,6 @@ class IntroPage(QWizardPage):
         content_layout.addLayout(right_layout, 6)
 
         layout = QVBoxLayout()
-        layout.addWidget(title_label)
-        layout.addSpacing(12)
         layout.addLayout(content_layout, 1)
         self.setLayout(layout)
 
@@ -187,12 +195,16 @@ class IntroPage(QWizardPage):
         wizard = self.wizard()
         if wizard is not None:
             wizard.setButtonText(QWizard.WizardButton.NextButton, "下一步")
+            wizard.button(QWizard.WizardButton.BackButton).hide()
             wizard.button(QWizard.WizardButton.NextButton).hide()
+            wizard.button(QWizard.WizardButton.CancelButton).hide()
 
     def cleanupPage(self) -> None:
         wizard = self.wizard()
         if wizard is not None:
+            wizard.button(QWizard.WizardButton.BackButton).show()
             wizard.button(QWizard.WizardButton.NextButton).show()
+            wizard.button(QWizard.WizardButton.CancelButton).show()
 
     def nextId(self) -> int:
         return PAGE_WELCOME
@@ -201,6 +213,11 @@ class IntroPage(QWizardPage):
         wizard = self.wizard()
         if wizard is not None:
             wizard.next()
+
+    def _exit_program(self) -> None:
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
 
     def _apply_photo(self) -> None:
         if self._photo_path is None:
