@@ -70,6 +70,8 @@ class GeneratorWizard(QWizard):
                     os.startfile(str(folder))
                 except Exception:
                     QMessageBox.warning(self, "打开失败", f"无法打开文件夹：\n{folder}")
+        if not self._state.auto_close_after_finish:
+            return
         super().accept()
 
 

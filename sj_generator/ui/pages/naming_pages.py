@@ -74,18 +74,7 @@ class NamingPage(QWizardPage):
         target_name = target_dir.name
         target_repo = target_dir / f"{target_name}.xlsx"
 
-        try:
-            if project_dir != target_dir:
-                project_dir.rename(target_dir)
-            cur_repo = target_dir / repo_path.name
-            if cur_repo != target_repo and cur_repo.exists():
-                cur_repo.rename(target_repo)
-        except Exception as e:
-            QMessageBox.critical(self, "重命名失败", str(e))
-            return False
-
         self._state.project_dir = target_dir
         self._state.repo_path = target_repo
         self._state.project_name_is_placeholder = False
         return True
-

@@ -15,7 +15,13 @@ from sj_generator.io.export_md import _normalize_numbers
 from sj_generator.models import Question
 from sj_generator import config as cfg_mod
 from sj_generator.ui.compare_highlight import compare_highlight_model_styles
-from sj_generator.ui.state import normalize_ai_concurrency
+from sj_generator.ui.state import (
+    default_repo_parent_dir,
+    normalize_default_repo_parent_dir_text,
+    normalize_ai_concurrency,
+    normalize_analysis_model_name,
+    normalize_analysis_provider,
+)
 
 
 def test_normalize_numbers_fill_after_existing_max() -> None:
@@ -203,10 +209,33 @@ def test_run_analysis_tasks_supports_three_way_concurrency() -> None:
 
 def test_normalize_ai_concurrency_keeps_allowed_values_and_falls_back() -> None:
     assert normalize_ai_concurrency(1) == 1
+    assert normalize_ai_concurrency(2) == 2
     assert normalize_ai_concurrency(3) == 3
+    assert normalize_ai_concurrency(4) == 4
     assert normalize_ai_concurrency(5) == 5
-    assert normalize_ai_concurrency(2) == 3
+    assert normalize_ai_concurrency(6) == 3
     assert normalize_ai_concurrency(None) == 3
+
+
+def test_normalize_analysis_provider_keeps_allowed_values_and_falls_back() -> None:
+    assert normalize_analysis_provider("deepseek") == "deepseek"
+    assert normalize_analysis_provider("kimi") == "kimi"
+    assert normalize_analysis_provider("qwen") == "qwen"
+    assert normalize_analysis_provider("other") == "deepseek"
+    assert normalize_analysis_provider(None) == "deepseek"
+
+
+def test_normalize_analysis_model_name_keeps_input_and_falls_back() -> None:
+    assert normalize_analysis_model_name("deepseek-reasoner") == "deepseek-reasoner"
+    assert normalize_analysis_model_name("custom-model") == "custom-model"
+    assert normalize_analysis_model_name("") == "deepseek-reasoner"
+    assert normalize_analysis_model_name(None) == "deepseek-reasoner"
+
+
+def test_normalize_default_repo_parent_dir_text_keeps_input_and_falls_back() -> None:
+    assert normalize_default_repo_parent_dir_text("C:/repo-root") == "C:/repo-root"
+    assert normalize_default_repo_parent_dir_text("") == str(default_repo_parent_dir())
+    assert normalize_default_repo_parent_dir_text(None) == str(default_repo_parent_dir())
 
 
 def test_process_excel_to_folder_mode_supports_legacy_headers(tmp_path) -> None:

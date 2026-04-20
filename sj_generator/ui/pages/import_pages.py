@@ -28,7 +28,6 @@ from sj_generator.config import (
     to_llm_config,
     to_qwen_llm_config,
 )
-from sj_generator.io.excel_repo import append_questions
 from sj_generator.io.source_reader import read_source_text
 from sj_generator.models import Question
 from sj_generator.ui.compare_highlight import compare_highlight_model_styles
@@ -69,15 +68,6 @@ def _rename_project(state: WizardState, *, new_name: str) -> bool:
     target_dir = _unique_child_dir(parent, safe)
     target_name = target_dir.name
     target_repo = target_dir / f"{target_name}.xlsx"
-
-    try:
-        if project_dir != target_dir:
-            project_dir.rename(target_dir)
-        cur_repo = target_dir / repo_path.name
-        if cur_repo != target_repo and cur_repo.exists():
-            cur_repo.rename(target_repo)
-    except Exception:
-        return False
 
     state.project_dir = target_dir
     state.repo_path = target_repo
@@ -311,11 +301,6 @@ class AiImportPage(QWizardPage):
 
     def _start_import(self) -> None:
         if self._thread is not None and self._thread.isRunning():
-            return
-
-        repo = self._state.repo_path
-        if repo is None:
-            QMessageBox.warning(self, "未选择题库", "请先创建题库。")
             return
 
         paths = self._state.ai_source_files or []
@@ -811,9 +796,6 @@ class AiImportEditPage(QWizardPage):
         return PAGE_DEDUPE_OPTION
 
     def validatePage(self) -> bool:
-        repo = self._state.repo_path
-        if repo is None:
-            return False
         questions: list[Question] = []
         for r in range(self._table.rowCount()):
             number = self._table.item(r, 0).text().strip() if self._table.item(r, 0) else ""
@@ -827,11 +809,7 @@ class AiImportEditPage(QWizardPage):
         if not questions:
             QMessageBox.warning(self, "没有可写入内容", "没有可写入的题目。")
             return False
-        try:
-            append_questions(repo, questions)
-        except Exception as e:
-            QMessageBox.critical(self, "写入失败", str(e))
-            return False
+        self._state.draft_questions = questions
         return True
 
     def _on_item_changed(self, item: QTableWidgetItem) -> None:

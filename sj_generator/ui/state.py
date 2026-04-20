@@ -1,11 +1,14 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 from sj_generator.io.dedupe import DedupeHit
 from sj_generator.models import Question
 
-AI_CONCURRENCY_OPTIONS = (1, 3, 5)
+AI_CONCURRENCY_OPTIONS = (1, 2, 3, 4, 5)
+ANALYSIS_PROVIDER_OPTIONS = ("deepseek", "kimi", "qwen")
+DEFAULT_ANALYSIS_MODEL_NAME = "deepseek-reasoner"
+DEFAULT_REPO_PARENT_DIR_NAME = "思政题库"
 
 
 def normalize_ai_concurrency(value: int | None) -> int:
@@ -16,11 +19,31 @@ def normalize_ai_concurrency(value: int | None) -> int:
     return workers if workers in AI_CONCURRENCY_OPTIONS else 3
 
 
+def normalize_analysis_provider(value: str | None) -> str:
+    provider = (value or "").strip().lower()
+    return provider if provider in ANALYSIS_PROVIDER_OPTIONS else "deepseek"
+
+
+def normalize_analysis_model_name(value: str | None) -> str:
+    model_name = (value or "").strip()
+    return model_name or DEFAULT_ANALYSIS_MODEL_NAME
+
+
+def default_repo_parent_dir() -> Path:
+    return Path.home() / "Desktop" / DEFAULT_REPO_PARENT_DIR_NAME
+
+
+def normalize_default_repo_parent_dir_text(value: str | None) -> str:
+    text = (value or "").strip()
+    return text or str(default_repo_parent_dir())
+
+
 @dataclass
 class WizardState:
     project_dir: Optional[Path] = None
     repo_path: Optional[Path] = None
     last_export_dir: Optional[Path] = None
+    draft_questions: list[Question] = field(default_factory=list)
     start_mode: str = "wizard"
     project_name_is_placeholder: bool = False
     input_mode: str = "ai"
@@ -33,9 +56,13 @@ class WizardState:
     dedupe_enabled: bool = True
     dedupe_folder: Optional[Path] = None
     dedupe_threshold: float = 0.85
+    default_repo_parent_dir_text: str = field(default_factory=lambda: str(default_repo_parent_dir()))
     analysis_enabled: bool = True
     analysis_use_reference_folder: bool = True
     analysis_use_reference_md: bool = False
     analysis_reference_md_path_text: str = ""
     analysis_include_common_mistakes: bool = True
+    analysis_provider: str = "deepseek"
+    analysis_model_name: str = DEFAULT_ANALYSIS_MODEL_NAME
     ai_concurrency: int = 3
+    auto_close_after_finish: bool = True

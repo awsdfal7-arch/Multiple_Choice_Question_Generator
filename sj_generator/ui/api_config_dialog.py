@@ -28,7 +28,6 @@ from sj_generator.config import (
     save_deepseek_config,
     save_kimi_config,
     save_qwen_config,
-    to_analysis_llm_config,
     to_kimi_llm_config,
     to_llm_config,
     to_qwen_llm_config,
@@ -46,7 +45,6 @@ class ApiConfigDialog(QDialog):
             cfg=load_deepseek_config(),
             save_fn=save_deepseek_config,
             to_llm_fn=to_llm_config,
-            analysis_to_llm_fn=to_analysis_llm_config,
             cfg_type=DeepSeekConfig,
         )
         self._kimi_tab = _ApiConfigTab(
@@ -109,14 +107,12 @@ class _ApiConfigTab(QWidget):
         save_fn: Callable[[object], None],
         to_llm_fn: Callable[[object], object],
         cfg_type,
-        analysis_to_llm_fn: Callable[[object], object] | None = None,
     ) -> None:
         super().__init__()
         self._title = title
         self._cfg = cfg
         self._save_fn = save_fn
         self._to_llm_fn = to_llm_fn
-        self._analysis_to_llm_fn = analysis_to_llm_fn
         self._cfg_type = cfg_type
 
         self._base_url_edit = QLineEdit(cfg.base_url)
@@ -124,12 +120,6 @@ class _ApiConfigTab(QWidget):
         self._model_edit.setEditable(True)
         self._model_edit.addItems(_model_candidates(title))
         self._model_edit.setCurrentText(cfg.model)
-        self._analysis_model_edit: QComboBox | None = None
-        if isinstance(cfg, DeepSeekConfig):
-            self._analysis_model_edit = QComboBox()
-            self._analysis_model_edit.setEditable(True)
-            self._analysis_model_edit.addItems(_analysis_model_candidates(title))
-            self._analysis_model_edit.setCurrentText(cfg.analysis_model)
         self._api_key_edit = QLineEdit(cfg.api_key)
         self._api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self._timeout_edit = QLineEdit(str(cfg.timeout_s))
@@ -144,8 +134,6 @@ class _ApiConfigTab(QWidget):
         form = QFormLayout()
         form.addRow("Base URL：", self._base_url_edit)
         form.addRow("Model：", self._model_edit)
-        if self._analysis_model_edit is not None:
-            form.addRow("解析生成模型：", self._analysis_model_edit)
         form.addRow("API Key：", self._api_key_edit)
         form.addRow("超时(秒)：", self._timeout_edit)
 
@@ -159,8 +147,6 @@ class _ApiConfigTab(QWidget):
 
         self._base_url_edit.textChanged.connect(self._reset_tested)
         self._model_edit.currentTextChanged.connect(self._reset_tested)
-        if self._analysis_model_edit is not None:
-            self._analysis_model_edit.currentTextChanged.connect(self._reset_tested)
         self._api_key_edit.textChanged.connect(self._reset_tested)
         self._timeout_edit.textChanged.connect(self._reset_tested)
 
@@ -189,13 +175,11 @@ class _ApiConfigTab(QWidget):
             model=self._model_edit.currentText().strip(),
             timeout_s=timeout_s,
         )
-        if self._analysis_model_edit is not None:
-            kwargs["analysis_model"] = self._analysis_model_edit.currentText().strip()
+        if isinstance(self._cfg, DeepSeekConfig):
+            kwargs["analysis_model"] = self._cfg.analysis_model.strip()
         cfg = self._cfg_type(**kwargs)
         if not cfg.base_url or not cfg.model:
             raise _ConfigValidationError(f"{self._title} 的 Base URL 和 Model 不能为空。")
-        if self._analysis_model_edit is not None and not getattr(cfg, "analysis_model", "").strip():
-            raise _ConfigValidationError(f"{self._title} 的解析生成模型不能为空。")
         return cfg
 
     def _on_test_api(self) -> None:
@@ -207,13 +191,6 @@ class _ApiConfigTab(QWidget):
                 QMessageBox.warning(self, "测试失败", f"{self._title} API 测试未通过，返回：{text}")
                 self._status.setText("最近一次测试失败。")
                 return
-            if self._analysis_model_edit is not None and self._analysis_to_llm_fn is not None:
-                analysis_client = LlmClient(self._analysis_to_llm_fn(cfg))
-                analysis_text = analysis_client.chat_text(system="你是连通性测试助手。", user="请只返回 OK")
-                if "OK" not in (analysis_text or "").upper():
-                    QMessageBox.warning(self, "测试失败", f"{self._title} 解析生成模型测试未通过，返回：{analysis_text}")
-                    self._status.setText("最近一次测试失败。")
-                    return
         except _ConfigValidationError as e:
             QMessageBox.warning(self, "参数不合法", str(e))
             return
@@ -226,9 +203,7 @@ class _ApiConfigTab(QWidget):
         QMessageBox.information(
             self,
             "测试通过",
-            f"{self._title} API 可用性测试通过。"
-            if self._analysis_model_edit is None
-            else f"{self._title} 普通模型与解析生成模型均测试通过。",
+            f"{self._title} API 可用性测试通过。",
         )
 
     def _cfg_key(self, cfg) -> str:
@@ -262,14 +237,5 @@ def _model_candidates(title: str) -> list[str]:
             "qwen3.5-plus",
             "qwen-plus",
             "qwen-turbo",
-        ]
-    return []
-
-
-def _analysis_model_candidates(title: str) -> list[str]:
-    if title == "DeepSeek":
-        return [
-            "deepseek-reasoner",
-            "deepseek-chat",
         ]
     return []

@@ -16,9 +16,8 @@ from PyQt6.QtWidgets import (
     QWizardPage,
 )
 
-from sj_generator.io.excel_repo import append_questions, create_empty_repo
 from sj_generator.models import Question
-from sj_generator.ui.state import WizardState
+from sj_generator.ui.state import WizardState, normalize_default_repo_parent_dir_text
 from sj_generator.ui.constants import PAGE_MANUAL, PAGE_AI_SELECT, PAGE_REVIEW
 
 _INVALID_FILENAME_CHARS = re.compile(r'[<>:"/\\\\|?*]+')
@@ -52,7 +51,7 @@ class RepoPage(QWizardPage):
         self._name_edit = QLineEdit()
         self._name_edit.setPlaceholderText("例如：第一章_单选题库")
 
-        self._data_radio = QRadioButton("保存到 data 文件夹")
+        self._data_radio = QRadioButton("默认保存到 桌面/思政题库文件夹")
         self._custom_radio = QRadioButton("自定义位置（选择父目录）")
         self._data_radio.setChecked(True)
 
@@ -80,7 +79,11 @@ class RepoPage(QWizardPage):
 
     def _browse(self) -> None:
         self._custom_radio.setChecked(True)
-        folder = QFileDialog.getExistingDirectory(self, "选择父目录", "")
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            "选择父目录",
+            normalize_default_repo_parent_dir_text(self._state.default_repo_parent_dir_text),
+        )
         if folder:
             self._parent_dir_edit.setText(folder)
 
@@ -95,9 +98,8 @@ class RepoPage(QWizardPage):
             is_placeholder = True
             safe = f"未命名_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-        base_dir = Path(__file__).resolve().parents[3]
         if self._data_radio.isChecked():
-            parent_dir = base_dir / "data"
+            parent_dir = Path(normalize_default_repo_parent_dir_text(self._state.default_repo_parent_dir_text))
         else:
             raw_parent = self._parent_dir_edit.text().strip()
             if not raw_parent:
@@ -109,13 +111,6 @@ class RepoPage(QWizardPage):
         safe = project_dir.name
 
         repo_path = project_dir / f"{safe}.xlsx"
-
-        try:
-            project_dir.mkdir(parents=True, exist_ok=False)
-            create_empty_repo(repo_path)
-        except Exception as e:
-            QMessageBox.critical(self, "操作失败", str(e))
-            return False
 
         self._state.project_dir = project_dir
         self._state.repo_path = repo_path
@@ -165,7 +160,7 @@ class ManualEntryPage(QWizardPage):
         self._analysis_edit = QTextEdit()
         self._analysis_edit.setPlaceholderText("解析（可留空）")
 
-        self._append_btn = QPushButton("追加到题库")
+        self._append_btn = QPushButton("追加到当前草稿")
         self._append_btn.clicked.connect(self._append)
 
         grid = QGridLayout()
@@ -188,7 +183,7 @@ class ManualEntryPage(QWizardPage):
     def _append(self) -> None:
         repo = self._state.repo_path
         if repo is None:
-            QMessageBox.warning(self, "未选择题库", "请先选择题库。")
+            QMessageBox.warning(self, "未选择题库", "请先创建题库。")
             return
 
         stem = self._stem_edit.toPlainText().strip()
@@ -206,18 +201,14 @@ class ManualEntryPage(QWizardPage):
             answer=answer,
             analysis=analysis,
         )
-        try:
-            append_questions(repo, [q])
-        except Exception as e:
-            QMessageBox.critical(self, "写入失败", str(e))
-            return
+        self._state.draft_questions.append(q)
 
         self._number_edit.clear()
         self._stem_edit.clear()
         self._options_edit.clear()
         self._answer_edit.clear()
         self._analysis_edit.clear()
-        QMessageBox.information(self, "已写入", "已追加到题库。")
+        QMessageBox.information(self, "已加入草稿", "已追加到当前题库草稿。")
 
     def nextId(self) -> int:
         return PAGE_REVIEW

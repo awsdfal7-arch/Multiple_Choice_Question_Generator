@@ -7,6 +7,7 @@ from pathlib import Path
 
 import jieba
 
+from sj_generator.models import Question
 from sj_generator.io.excel_repo import load_questions
 
 
@@ -74,6 +75,64 @@ def dedupe_between_repos(
                     hits.append(
                         DedupeHit(
                             left_file=left_repo,
+                            left_number=lq.number,
+                            left_stem=lq.stem,
+                            right_file=file_path,
+                            right_number=rq.number,
+                            right_stem=rq.stem,
+                            similarity=sim,
+                        )
+                    )
+
+    hits.sort(key=lambda x: x.similarity, reverse=True)
+    if limit > 0:
+        hits = hits[:limit]
+    return hits
+
+
+def dedupe_between_questions_and_repos(
+    *,
+    left_questions: list[Question],
+    left_file: Path,
+    other_repos: list[Path],
+    threshold: float,
+    limit: int = 200,
+) -> list[DedupeHit]:
+    filtered_left_questions = [q for q in left_questions if q.stem.strip()]
+    other_files = [p for p in other_repos if p.resolve() != left_file.resolve()]
+
+    right_questions_by_file: list[tuple[Path, list[Question]]] = []
+    for repo in other_files:
+        qs = [q for q in load_questions(repo) if q.stem.strip()]
+        if qs:
+            right_questions_by_file.append((repo, qs))
+
+    corpus: list[str] = []
+    corpus.extend([q.stem for q in filtered_left_questions])
+    for _, qs in right_questions_by_file:
+        corpus.extend([q.stem for q in qs])
+
+    tfidf, norms = _build_tfidf(corpus)
+
+    left_count = len(filtered_left_questions)
+    idx = 0
+    left_vecs = tfidf[:left_count]
+    left_norms = norms[:left_count]
+    idx += left_count
+
+    hits: list[DedupeHit] = []
+    for file_path, qs in right_questions_by_file:
+        right_vecs = tfidf[idx : idx + len(qs)]
+        right_norms = norms[idx : idx + len(qs)]
+        idx += len(qs)
+
+        for li, lq in enumerate(filtered_left_questions):
+            for ri, rq in enumerate(qs):
+                sim = _cosine(left_vecs[li], left_norms[li], right_vecs[ri], right_norms[ri])
+                if sim >= threshold:
+                    hits.append(
+                        DedupeHit(
+                            left_file=left_file,
                             left_number=lq.number,
                             left_stem=lq.stem,
                             right_file=file_path,

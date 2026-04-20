@@ -10,7 +10,6 @@ from PyQt6.QtWidgets import (
     QWizardPage,
 )
 
-from sj_generator.io.excel_repo import load_questions, save_questions
 from sj_generator.models import Question
 from sj_generator.ui.state import WizardState
 from sj_generator.ui.constants import PAGE_DEDUPE_OPTION
@@ -30,7 +29,7 @@ class ReviewPage(QWizardPage):
         refresh_btn = QPushButton("刷新")
         refresh_btn.clicked.connect(self._reload)
 
-        save_btn = QPushButton("保存到题库")
+        save_btn = QPushButton("保存到当前草稿")
         save_btn.clicked.connect(self._save)
 
         btns = QHBoxLayout()
@@ -38,7 +37,7 @@ class ReviewPage(QWizardPage):
         btns.addWidget(save_btn)
         btns.addStretch(1)
 
-        hint = QLabel("双击单元格可编辑；本页保存会覆盖写入题库文件。")
+        hint = QLabel("双击单元格可编辑；本页保存仅更新当前草稿，最终会在导出页统一写入硬盘。")
         hint.setWordWrap(True)
 
         layout = QVBoxLayout()
@@ -51,14 +50,7 @@ class ReviewPage(QWizardPage):
         self._reload()
 
     def _reload(self) -> None:
-        repo = self._state.repo_path
-        if repo is None:
-            return
-        try:
-            questions = load_questions(repo)
-        except Exception as e:
-            QMessageBox.critical(self, "读取失败", str(e))
-            return
+        questions = list(self._state.draft_questions)
 
         self._table.setRowCount(len(questions))
         for r, q in enumerate(questions):
@@ -69,10 +61,6 @@ class ReviewPage(QWizardPage):
             self._set_item(r, 4, q.analysis)
 
     def _save(self) -> None:
-        repo = self._state.repo_path
-        if repo is None:
-            return
-
         questions: list[Question] = []
         for r in range(self._table.rowCount()):
             number = self._get_item_text(r, 0).strip()
@@ -92,13 +80,8 @@ class ReviewPage(QWizardPage):
                 )
             )
 
-        try:
-            save_questions(repo, questions)
-        except Exception as e:
-            QMessageBox.critical(self, "保存失败", str(e))
-            return
-
-        QMessageBox.information(self, "已保存", "已保存到题库。")
+        self._state.draft_questions = questions
+        QMessageBox.information(self, "已保存", "已保存到当前草稿。")
 
     def _set_item(self, row: int, col: int, text: str) -> None:
         item = QTableWidgetItem(text or "")

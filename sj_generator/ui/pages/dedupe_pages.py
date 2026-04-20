@@ -21,8 +21,11 @@ from PyQt6.QtWidgets import (
     QWizardPage,
 )
 
-from sj_generator.io.dedupe import DedupeHit, dedupe_between_repos, list_xlsx_in_folder
-from sj_generator.io.excel_repo import load_questions
+from sj_generator.io.dedupe import (
+    DedupeHit,
+    dedupe_between_questions_and_repos,
+    list_xlsx_in_folder,
+)
 from sj_generator.models import Question
 from sj_generator.ui.state import WizardState
 from sj_generator.ui.constants import (
@@ -195,10 +198,14 @@ class DedupeResultPage(QWizardPage):
         self.completeChanged.emit()
 
         repo = self._state.repo_path
+        left_questions = list(self._state.draft_questions)
         folder = self._state.dedupe_folder
         threshold = self._state.dedupe_threshold
         if repo is None or folder is None:
             self._on_error("查重配置缺失，请返回上一步重新设置。")
+            return
+        if not left_questions:
+            self._on_error("当前题库草稿为空，无法执行查重。")
             return
 
         targets = [p for p in list_xlsx_in_folder(folder) if p.suffix.lower() == ".xlsx" and p.exists()]
@@ -208,7 +215,7 @@ class DedupeResultPage(QWizardPage):
             return
 
         thread = QThread(self)
-        worker = _DedupeWorker(left_repo=repo, targets=targets, threshold=threshold)
+        worker = _DedupeWorker(left_repo=repo, left_questions=left_questions, targets=targets, threshold=threshold)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.done.connect(self._on_done)
@@ -272,7 +279,12 @@ class DedupeResultPage(QWizardPage):
         p = path.resolve()
         if p in self._questions_cache:
             return self._questions_cache[p]
-        qs = load_questions(p)
+        if self._state.repo_path is not None and p == self._state.repo_path.resolve():
+            qs = list(self._state.draft_questions)
+        else:
+            from sj_generator.io.excel_repo import load_questions
+
+            qs = load_questions(p)
         self._questions_cache[p] = qs
         return qs
 
@@ -281,16 +293,18 @@ class _DedupeWorker(QObject):
     done = pyqtSignal(object)
     error = pyqtSignal(str)
 
-    def __init__(self, *, left_repo: Path, targets: list[Path], threshold: float) -> None:
+    def __init__(self, *, left_repo: Path, left_questions: list[Question], targets: list[Path], threshold: float) -> None:
         super().__init__()
         self._left_repo = left_repo
+        self._left_questions = left_questions
         self._targets = targets
         self._threshold = threshold
 
     def run(self) -> None:
         try:
-            hits = dedupe_between_repos(
-                left_repo=self._left_repo,
+            hits = dedupe_between_questions_and_repos(
+                left_questions=self._left_questions,
+                left_file=self._left_repo,
                 other_repos=self._targets,
                 threshold=self._threshold,
             )

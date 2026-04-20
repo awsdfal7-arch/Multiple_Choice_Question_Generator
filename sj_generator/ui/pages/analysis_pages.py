@@ -18,18 +18,38 @@ from PyQt6.QtWidgets import (
     QWizardPage,
 )
 
-from sj_generator.ai.client import LlmClient
+from sj_generator.ai.client import LlmClient, LlmConfig
 from sj_generator.ai.explanations import ExplanationInputs, generate_explanation
 from sj_generator.ai.task_runner import run_tasks_in_parallel
-from sj_generator.config import load_deepseek_config, to_analysis_llm_config
-from sj_generator.io.excel_repo import load_questions, save_questions
+from sj_generator.config import (
+    load_deepseek_config,
+    load_kimi_config,
+    load_qwen_config,
+    to_analysis_llm_config,
+    to_kimi_llm_config,
+    to_qwen_llm_config,
+)
 from sj_generator.models import Question
-from sj_generator.ui.state import WizardState, normalize_ai_concurrency
+from sj_generator.ui.state import (
+    WizardState,
+    normalize_ai_concurrency,
+    normalize_analysis_model_name,
+    normalize_analysis_provider,
+)
 from sj_generator.ui.constants import PAGE_AI_ANALYSIS, PAGE_EXPORT, PAGE_NAME
 
 
 def _common_mistakes_md_path(root_dir: Path) -> Path:
     return root_dir / "common_mistakes" / "选择题常见错题归因与答题策略分析.md"
+
+
+def _analysis_provider_label(provider: str) -> str:
+    labels = {"deepseek": "DeepSeek", "kimi": "Kimi", "qwen": "千问"}
+    return labels.get(normalize_analysis_provider(provider), "DeepSeek")
+
+
+def _analysis_target_text(provider: str, model_name: str) -> str:
+    return f"{_analysis_provider_label(provider)} / {normalize_analysis_model_name(model_name)}"
 
 
 class AiAnalysisOptionPage(QWizardPage):
@@ -207,14 +227,7 @@ class AiAnalysisPage(QWizardPage):
         self._retry_btn.setEnabled((not self._running) and bool(self._tasks))
 
     def _load_repo(self) -> None:
-        repo = self._state.repo_path
-        if repo is None:
-            return
-        try:
-            questions = load_questions(repo)
-        except Exception as e:
-            QMessageBox.critical(self, "读取失败", str(e))
-            return
+        questions = list(self._state.draft_questions)
         self._table.setRowCount(len(questions))
         for r, q in enumerate(questions):
             self._table.setItem(r, 0, QTableWidgetItem(q.number or ""))
@@ -272,18 +285,41 @@ class AiAnalysisPage(QWizardPage):
         if self._running or self._done:
             return
 
-        cfg = load_deepseek_config()
+        provider = normalize_analysis_provider(self._state.analysis_provider)
+        provider_label = _analysis_provider_label(provider)
+        model_name = normalize_analysis_model_name(self._state.analysis_model_name)
+        if provider == "kimi":
+            cfg = load_kimi_config()
+            llm_config = LlmConfig(
+                base_url=cfg.base_url.strip(),
+                api_key=cfg.api_key.strip(),
+                model=model_name,
+                timeout_s=float(cfg.timeout_s),
+            )
+        elif provider == "qwen":
+            cfg = load_qwen_config()
+            llm_config = LlmConfig(
+                base_url=cfg.base_url.strip(),
+                api_key=cfg.api_key.strip(),
+                model=model_name,
+                timeout_s=float(cfg.timeout_s),
+            )
+        else:
+            cfg = load_deepseek_config()
+            llm_config = LlmConfig(
+                base_url=cfg.base_url.strip(),
+                api_key=cfg.api_key.strip(),
+                model=model_name,
+                timeout_s=float(cfg.timeout_s),
+            )
+
         if not cfg.is_ready():
-            QMessageBox.warning(self, "未配置", "请先在配置文件中填写 API Key。")
+            QMessageBox.warning(self, "未配置", f"请先完成 {provider_label} 配置。")
             self._status_label.setText("未配置：无法开始生成解析。")
             w = self.wizard()
             if isinstance(w, QWizard):
                 w.setButtonText(QWizard.WizardButton.NextButton, "下一步")
             self.completeChanged.emit()
-            return
-
-        repo = self._state.repo_path
-        if repo is None:
             return
 
         root_dir = Path(__file__).resolve().parents[3]
@@ -307,7 +343,7 @@ class AiAnalysisPage(QWizardPage):
         self._retry_btn.setEnabled(False)
         self._progress.setRange(0, len(tasks))
         self._progress.setValue(0)
-        self._status_label.setText("批量生成：准备开始…")
+        self._status_label.setText(f"批量生成：准备开始…（模型：{_analysis_target_text(provider, model_name)}）")
         self._current_label.setText("")
         w = self.wizard()
         if isinstance(w, QWizard):
@@ -315,7 +351,8 @@ class AiAnalysisPage(QWizardPage):
 
         thread = QThread(self)
         worker = _AiAnalysisWorker(
-            cfg=cfg,
+            llm_config=llm_config,
+            provider_label=provider_label,
             tasks=tasks,
             reference_md_paths=ref_paths,
             include_common_mistakes=self._state.analysis_include_common_mistakes,
@@ -357,7 +394,8 @@ class AiAnalysisPage(QWizardPage):
         self._total_task_count = total
         self._status_label.setText(self._build_running_status())
         workers = normalize_ai_concurrency(self._state.ai_concurrency)
-        self._current_label.setText(f"选择题 {current}/{total} 题已发起解析（并发 {workers} 路）")
+        target_text = _analysis_target_text(self._state.analysis_provider, self._state.analysis_model_name)
+        self._current_label.setText(f"选择题 {current}/{total} 题已发起解析（模型：{target_text}，并发 {workers} 路）")
 
     def _on_batch_row_done(self, row: int, text: str, elapsed_s: float) -> None:
         existing = self._table.item(row, 4).text().strip() if self._table.item(row, 4) else ""
@@ -375,17 +413,7 @@ class AiAnalysisPage(QWizardPage):
         self._current_label.setText(f"第 {row_no} 行处理失败")
 
     def _on_batch_done(self, stopped: bool) -> None:
-        repo = self._state.repo_path
-        if repo is None:
-            self._running = False
-            self._thread = None
-            self._worker = None
-            self._refresh_status()
-            self._done = True
-            self.completeChanged.emit()
-            return
-
-        self._status_label.setText("批量生成：写回题库…")
+        self._status_label.setText("批量生成：写回当前草稿…")
         self._current_label.setText("")
         questions: list[Question] = []
         for r in range(self._table.rowCount()):
@@ -398,17 +426,7 @@ class AiAnalysisPage(QWizardPage):
                 continue
             questions.append(Question(number=number, stem=stem, options=options, answer=answer, analysis=analysis))
 
-        try:
-            save_questions(repo, questions)
-        except Exception as e:
-            QMessageBox.critical(self, "写回失败", str(e))
-            self._running = False
-            self._thread = None
-            self._worker = None
-            self._refresh_status()
-            self._current_label.setText("")
-            self.completeChanged.emit()
-            return
+        self._state.draft_questions = questions
 
         self._progress.setValue(self._progress.maximum())
         self._tasks = self._collect_tasks()
@@ -481,10 +499,11 @@ class AiAnalysisPage(QWizardPage):
         current = self._current_task_no
         completed = self._completed_task_count
         workers = normalize_ai_concurrency(self._state.ai_concurrency)
+        target_text = _analysis_target_text(self._state.analysis_provider, self._state.analysis_model_name)
         if total > 0 and current > 0:
-            return f"批量生成：并发 {workers} 路，已发起 {current}/{total}，已完成 {completed}/{total}"
+            return f"批量生成：模型 {target_text}，并发 {workers} 路，已发起 {current}/{total}，已完成 {completed}/{total}"
         if total > 0:
-            return f"批量生成：并发 {workers} 路，已完成 {completed}/{total}"
+            return f"批量生成：模型 {target_text}，并发 {workers} 路，已完成 {completed}/{total}"
         return "批量生成中…"
 
 
@@ -499,7 +518,8 @@ class _AiAnalysisWorker(QObject):
     def __init__(
         self,
         *,
-        cfg,
+        llm_config,
+        provider_label: str,
         tasks: list[tuple[int, str, str]],
         reference_md_paths: list[Path],
         include_common_mistakes: bool,
@@ -507,7 +527,8 @@ class _AiAnalysisWorker(QObject):
         max_workers: int,
     ) -> None:
         super().__init__()
-        self._cfg = cfg
+        self._llm_config = llm_config
+        self._provider_label = provider_label
         self._tasks = tasks
         self._reference_md_paths = reference_md_paths
         self._include_common_mistakes = include_common_mistakes
@@ -525,7 +546,7 @@ class _AiAnalysisWorker(QObject):
             
             def run_one(task: tuple[int, str, str]) -> tuple[str, float]:
                 _, qtext, atext = task
-                client = LlmClient(to_analysis_llm_config(self._cfg))
+                client = LlmClient(self._llm_config)
                 started_at = time.perf_counter()
                 inp = ExplanationInputs(
                     question_text=qtext,
