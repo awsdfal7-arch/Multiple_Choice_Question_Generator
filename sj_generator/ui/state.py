@@ -52,6 +52,7 @@ class WizardState:
     ai_source_files: Optional[list[Path]] = None
     ai_source_files_text: str = ""
     ai_import_questions: Optional[list[Question]] = None
+    ai_import_level_path: str = ""
     dedupe_hits: Optional[list[DedupeHit]] = None
     dedupe_enabled: bool = True
     dedupe_folder: Optional[Path] = None

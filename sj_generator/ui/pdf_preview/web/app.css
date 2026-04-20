@@ -1,0 +1,104 @@
+:root {
+  color-scheme: light;
+  font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+  background: #f3f4f6;
+  color: #111827;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+  background: #e5e7eb;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+}
+
+#scrollContainer {
+  flex: 1;
+  overflow: auto;
+}
+
+#pages {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding: 0;
+}
+
+.pdf-page {
+  position: relative;
+  background: #ffffff;
+  box-shadow: none;
+  user-select: text;
+  transition: transform 0.2s ease, margin 0.2s ease;
+  z-index: 1;
+}
+
+.pdf-page.crop-enabled {
+  /* 裁边模式下，隐藏超出内容的部分（把白边直接截断） */
+  overflow: hidden;
+}
+
+.pdf-canvas {
+  display: block;
+}
+
+.textLayer,
+.selectionLayer,
+.cropLayer {
+  position: absolute;
+  inset: 0;
+}
+
+.textLayer {
+  overflow: hidden;
+  opacity: 1;
+  line-height: 1;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+}
+
+.textLayer span,
+.textLayer br {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0 0;
+}
+
+.selectionLayer,
+.cropLayer {
+  pointer-events: none;
+}
+
+.selection-rect {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px solid #dc2626;
+  background: transparent;
+  border-radius: 2px;
+}
+
+/* 裁边模式下，直接隐藏半透明遮罩，因为我们已经用 overflow: hidden 把它裁掉了 */
+.crop-mask {
+  position: absolute;
+  background: rgba(246, 248, 251, 0.96);
+  display: none;
+}
+
+.pdf-page.crop-enabled .crop-mask {
+  display: none;
+}

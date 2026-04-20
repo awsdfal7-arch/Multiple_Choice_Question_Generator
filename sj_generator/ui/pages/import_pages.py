@@ -1,8 +1,11 @@
 import json
 import re
 from pathlib import Path
-from PyQt6.QtCore import QObject, QThread, QTimer, Qt, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QDragEnterEvent, QDropEvent
+from tempfile import TemporaryDirectory
+
+from docx import Document
+from PyQt6.QtCore import QBuffer, QObject, QSizeF, QThread, QTimer, Qt, pyqtSignal
+from PyQt6.QtGui import QBrush, QColor, QDragEnterEvent, QDropEvent, QPageSize, QPdfWriter, QTextDocument
 from PyQt6.QtWidgets import (
     QFileDialog,
     QHeaderView,
@@ -14,7 +17,11 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QTableWidget,
     QTableWidgetItem,
+    QTextEdit,
+    QSplitter,
+    QStackedWidget,
     QVBoxLayout,
+    QWidget,
     QWizardPage,
 )
 
@@ -32,7 +39,8 @@ from sj_generator.io.source_reader import read_source_text
 from sj_generator.models import Question
 from sj_generator.ui.compare_highlight import compare_highlight_model_styles
 from sj_generator.ui.state import WizardState, normalize_ai_concurrency
-from sj_generator.ui.constants import PAGE_AI_IMPORT, PAGE_AI_IMPORT_EDIT, PAGE_DEDUPE_OPTION
+from sj_generator.ui.constants import PAGE_AI_IMPORT, PAGE_AI_IMPORT_EDIT, PAGE_AI_LEVEL_PATH
+from sj_generator.ui.pdf_preview import DocumentPdfWebView
 
 
 def _sanitize_filename(name: str) -> str:
@@ -112,28 +120,92 @@ class AiSelectFilesPage(QWizardPage):
         self.setTitle("选择资料文件")
         self.setAcceptDrops(True)
 
-        self._files_edit = QLineEdit()
+        self._files_edit = QTextEdit()
         self._files_edit.setReadOnly(True)
         self._files_edit.setPlaceholderText("选择或把待处理的 docx/txt 资料文件拖动到此处")
 
         browse_btn = QPushButton("选择文件…")
         browse_btn.clicked.connect(self._browse)
 
-        layout = QVBoxLayout()
         row = QHBoxLayout()
-        row.addWidget(self._files_edit, 1)
         row.addWidget(browse_btn)
-        layout.addLayout(row)
+        row.addStretch(1)
 
+        file_hint = QLabel("左侧上方用于选择或拖入资料文件。")
+        file_hint.setWordWrap(True)
+
+        left_top_layout = QVBoxLayout()
+        left_top_layout.addLayout(row)
+        left_top_layout.addWidget(self._files_edit, 1)
+        left_top_layout.addWidget(file_hint)
+        left_top_panel = QWidget()
+        left_top_panel.setStyleSheet("border: 1px solid black;")
+        left_top_panel.setLayout(left_top_layout)
+
+        self._import_reminder = QTextEdit()
+        self._import_reminder.setReadOnly(True)
+        self._import_reminder.setPlainText(
+            "导入提醒\n\n"
+            "1. 当前支持 docx 与 txt 文件。\n"
+            "2. 可点击“选择文件”或直接拖拽文件到左上区域。\n"
+            "3. 建议导入前先确认文档内容完整、题号清晰。\n"
+            "4. 点击“下一步”后将直接开始 AI 解析。"
+        )
+        left_bottom_layout = QVBoxLayout()
+        left_bottom_layout.addWidget(self._import_reminder, 1)
+        left_bottom_panel = QWidget()
+        left_bottom_panel.setStyleSheet("border: 1px solid black;")
+        left_bottom_panel.setLayout(left_bottom_layout)
+
+        left_splitter = QSplitter(Qt.Orientation.Vertical)
+        left_splitter.addWidget(left_top_panel)
+        left_splitter.addWidget(left_bottom_panel)
+        left_splitter.setChildrenCollapsible(False)
+        left_splitter.setStretchFactor(0, 3)
+        left_splitter.setStretchFactor(1, 2)
+        left_splitter.setSizes([300, 180])
+
+        self._preview_placeholder = QTextEdit()
+        self._preview_placeholder.setReadOnly(True)
+        self._preview_placeholder.setPlainText("文档预览区域\n\n请选择文件后预览。")
+        self._preview_text = QTextEdit()
+        self._preview_text.setReadOnly(True)
+        self._preview_pdf_view = DocumentPdfWebView(self)
+        self._preview_stack = QStackedWidget()
+        self._preview_stack.addWidget(self._preview_placeholder)
+        self._preview_stack.addWidget(self._preview_text)
+        self._preview_stack.addWidget(self._preview_pdf_view)
+        self._preview_temp_dir = TemporaryDirectory(prefix="sj_doc_preview_")
+        self._preview_pdf_path = Path(self._preview_temp_dir.name) / "preview.pdf"
+
+        right_layout = QVBoxLayout()
+        right_layout.addWidget(self._preview_stack, 1)
+        right_panel = QWidget()
+        right_panel.setStyleSheet("border: 1px solid black;")
+        right_panel.setLayout(right_layout)
+
+        content_splitter = QSplitter(Qt.Orientation.Horizontal)
+        content_splitter.addWidget(left_splitter)
+        content_splitter.addWidget(right_panel)
+        content_splitter.setChildrenCollapsible(False)
+        content_splitter.setStretchFactor(0, 1)
+        content_splitter.setStretchFactor(1, 1)
+        content_splitter.setSizes([460, 460])
+
+        layout = QVBoxLayout()
+        layout.addWidget(content_splitter, 1)
         hint = QLabel("点击“下一步”后会直接开始解析。")
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
-        layout.addStretch(1)
         self.setLayout(layout)
 
     def initializePage(self) -> None:
         if self._state.ai_source_files_text:
-            self._files_edit.setText(self._state.ai_source_files_text)
+            self._files_edit.setPlainText(self._display_paths_text(self._state.ai_source_files_text))
+            paths = self._state.ai_source_files or []
+            self._update_import_reminder(paths)
+            self._update_preview(paths)
+        else:
+            self._update_import_reminder([])
+            self._update_preview([])
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasUrls():
@@ -145,7 +217,11 @@ class AiSelectFilesPage(QWizardPage):
         paths = _extract_paths_from_drop_event(event)
         paths = [p for p in paths if p.suffix.lower() in (".docx", ".txt")]
         if paths:
-            self._files_edit.setText(_merge_paths_text(self._files_edit.text(), paths))
+            merged = _merge_paths_text(self._serialize_paths_text(), paths)
+            self._files_edit.setPlainText(self._display_paths_text(merged))
+            merged_paths = [Path(p.strip()) for p in merged.split(";") if p.strip()]
+            self._update_import_reminder(merged_paths)
+            self._update_preview(merged_paths)
             event.acceptProposedAction()
         else:
             event.ignore()
@@ -155,10 +231,13 @@ class AiSelectFilesPage(QWizardPage):
             self, "选择资料文件", "", "Word (*.docx);;Text (*.txt);;All Files (*)"
         )
         if files:
-            self._files_edit.setText("; ".join(files))
+            selected_paths = [Path(p) for p in files]
+            self._files_edit.setPlainText("\n".join(files))
+            self._update_import_reminder(selected_paths)
+            self._update_preview(selected_paths)
 
     def validatePage(self) -> bool:
-        raw = self._files_edit.text().strip()
+        raw = self._serialize_paths_text()
         if not raw:
             QMessageBox.warning(self, "未选择文件", "请选择待处理的资料文件。")
             return False
@@ -176,6 +255,96 @@ class AiSelectFilesPage(QWizardPage):
 
     def nextId(self) -> int:
         return PAGE_AI_IMPORT
+
+    def _serialize_paths_text(self) -> str:
+        raw = self._files_edit.toPlainText()
+        parts = [p.strip() for line in raw.splitlines() for p in line.split(";") if p.strip()]
+        return "; ".join(parts)
+
+    def _display_paths_text(self, raw: str) -> str:
+        parts = [p.strip() for p in raw.split(";") if p.strip()]
+        return "\n".join(parts)
+
+    def _update_import_reminder(self, paths: list[Path]) -> None:
+        if not paths:
+            self._import_reminder.setPlainText(
+                "导入提醒\n\n"
+                "当前检查：\n"
+                "1. 尚未选择文件。\n"
+                "2. Word 文档中的图片检查：待检查。\n"
+                "3. Word 文档中的表格检查：待检查。"
+            )
+            return
+
+        lines = ["导入提醒", "", "当前检查："]
+        for path in paths:
+            ext = path.suffix.lower()
+            lines.append(f"- {path.name}")
+            if ext != ".docx":
+                lines.append("  图片：仅对 Word 文档检查")
+                lines.append("  表格：仅对 Word 文档检查")
+                continue
+            has_image, has_table, error_text = self._inspect_docx_content(path)
+            if error_text:
+                lines.append(f"  图片：检查失败（{error_text}）")
+                lines.append(f"  表格：检查失败（{error_text}）")
+                continue
+            lines.append(f"  图片：{'存在' if has_image else '不存在'}")
+            lines.append(f"  表格：{'存在' if has_table else '不存在'}")
+
+        self._import_reminder.setPlainText("\n".join(lines))
+
+    def _inspect_docx_content(self, path: Path) -> tuple[bool, bool, str]:
+        try:
+            doc = Document(str(path))
+            has_table = len(doc.tables) > 0
+            has_image = len(doc.inline_shapes) > 0
+            return has_image, has_table, ""
+        except Exception as e:
+            return False, False, str(e)
+
+    def _update_preview(self, paths: list[Path]) -> None:
+        if not paths:
+            self._preview_placeholder.setPlainText("文档预览区域\n\n请选择文件后预览。")
+            self._preview_stack.setCurrentWidget(self._preview_placeholder)
+            return
+
+        path = paths[0]
+        ext = path.suffix.lower()
+        if ext == ".txt":
+            self._preview_text.setPlainText(read_source_text(path))
+            self._preview_stack.setCurrentWidget(self._preview_text)
+            return
+        if ext == ".docx":
+            try:
+                pdf_data = self._build_docx_preview_pdf(path)
+                self._preview_pdf_path.write_bytes(pdf_data)
+                self._preview_pdf_view.open_pdf(self._preview_pdf_path)
+                self._preview_stack.setCurrentWidget(self._preview_pdf_view)
+                return
+            except Exception as e:
+                self._preview_placeholder.setPlainText(f"文档预览区域\n\nWord 预览失败：{e}")
+                self._preview_stack.setCurrentWidget(self._preview_placeholder)
+                return
+
+        self._preview_placeholder.setPlainText("文档预览区域\n\n当前文件类型暂不支持预览。")
+        self._preview_stack.setCurrentWidget(self._preview_placeholder)
+
+    def _build_docx_preview_pdf(self, path: Path) -> bytes:
+        text = read_source_text(path)
+        buffer = QBuffer()
+        buffer.open(QBuffer.OpenModeFlag.WriteOnly)
+        writer = QPdfWriter(buffer)
+        writer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
+        writer.setResolution(96)
+
+        doc = QTextDocument()
+        doc.setPlainText(text or "(文档内容为空)")
+        page_size = writer.pageLayout().paintRectPixels(writer.resolution()).size()
+        doc.setPageSize(QSizeF(page_size))
+        doc.print(writer)
+        buffer.close()
+        return bytes(buffer.data())
 
 
 class AiImportPage(QWizardPage):
@@ -793,7 +962,7 @@ class AiImportEditPage(QWizardPage):
         self._status.setText(f"当前可编辑题目：{self._table.rowCount()} 题")
 
     def nextId(self) -> int:
-        return PAGE_DEDUPE_OPTION
+        return PAGE_AI_LEVEL_PATH
 
     def validatePage(self) -> bool:
         questions: list[Question] = []

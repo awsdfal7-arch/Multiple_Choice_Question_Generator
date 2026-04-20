@@ -195,6 +195,26 @@ def save_qwen_config(cfg: QwenConfig) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def load_welcome_table_column_visibility() -> dict[str, bool]:
+    path = _welcome_view_config_path()
+    data = _load_json_config_file(path)
+    raw = data.get("table_column_visibility")
+    if not isinstance(raw, dict):
+        return {}
+    result: dict[str, bool] = {}
+    for key, value in raw.items():
+        if isinstance(key, str):
+            result[key] = bool(value)
+    return result
+
+
+def save_welcome_table_column_visibility(visibility: dict[str, bool]) -> None:
+    path = _welcome_view_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = {"table_column_visibility": {str(key): bool(value) for key, value in visibility.items()}}
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def to_qwen_llm_config(cfg: QwenConfig) -> LlmConfig:
     return LlmConfig(
         base_url=_clean_base_url(cfg.base_url),
@@ -256,6 +276,13 @@ def _qwen_config_path() -> Path:
     if env:
         return Path(env)
     return _default_config_dir() / "qwen.json"
+
+
+def _welcome_view_config_path() -> Path:
+    env = os.getenv("SJ_GENERATOR_WELCOME_VIEW_CONFIG_PATH", "").strip()
+    if env:
+        return Path(env)
+    return _default_config_dir() / "welcome_view.json"
 
 
 def _load_json_config_file(path: Path) -> dict:

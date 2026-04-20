@@ -42,6 +42,18 @@ def _unique_child_dir(parent: Path, base_name: str) -> Path:
         i += 1
 
 
+def ensure_default_project_target(state: WizardState) -> None:
+    if state.project_dir is not None and state.repo_path is not None:
+        return
+    parent_dir = Path(normalize_default_repo_parent_dir_text(state.default_repo_parent_dir_text))
+    safe = f"未命名_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    project_dir = _unique_child_dir(parent_dir, safe)
+    repo_path = project_dir / f"{project_dir.name}.xlsx"
+    state.project_dir = project_dir
+    state.repo_path = repo_path
+    state.project_name_is_placeholder = True
+
+
 class RepoPage(QWizardPage):
     def __init__(self, state: WizardState) -> None:
         super().__init__()
@@ -135,6 +147,7 @@ class ModePage(QWizardPage):
         self.setLayout(layout)
 
     def nextId(self) -> int:
+        ensure_default_project_target(self._state)
         self._state.input_mode = "manual" if self._manual_radio.isChecked() else "ai"
         return PAGE_MANUAL if self._state.input_mode == "manual" else PAGE_AI_SELECT
 
@@ -181,10 +194,7 @@ class ManualEntryPage(QWizardPage):
         self.setLayout(layout)
 
     def _append(self) -> None:
-        repo = self._state.repo_path
-        if repo is None:
-            QMessageBox.warning(self, "未选择题库", "请先创建题库。")
-            return
+        ensure_default_project_target(self._state)
 
         stem = self._stem_edit.toPlainText().strip()
         options = self._options_edit.toPlainText().strip()

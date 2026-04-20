@@ -12,6 +12,7 @@ from sj_generator.ui.pages import (
     IntroPage,
     WelcomePage,
     NamingPage,
+    AiLevelPathPage,
     RepoPage,
     ModePage,
     ManualEntryPage,
@@ -26,6 +27,11 @@ from sj_generator.ui.pages import (
     AiAnalysisPage,
     ExportPage,
 )
+
+
+DEFAULT_WINDOW_WIDTH = 976
+DEFAULT_WINDOW_HEIGHT = 575
+QT_MAX_WINDOW_SIZE = 16777215
 
 
 class GeneratorWizard(QWizard):
@@ -50,12 +56,12 @@ class GeneratorWizard(QWizard):
         self._state = WizardState()
         self.setPage(PAGE_INTRO, IntroPage())
         self.setPage(PAGE_WELCOME, WelcomePage(self._state))
-        self.setPage(PAGE_REPO, RepoPage(self._state))
         self.setPage(PAGE_MODE, ModePage(self._state))
         self.setPage(PAGE_MANUAL, ManualEntryPage(self._state))
         self.setPage(PAGE_AI_SELECT, AiSelectFilesPage(self._state))
         self.setPage(PAGE_AI_IMPORT, AiImportPage(self._state))
         self.setPage(PAGE_AI_IMPORT_EDIT, AiImportEditPage(self._state))
+        self.setPage(PAGE_AI_LEVEL_PATH, AiLevelPathPage(self._state))
         self.setPage(PAGE_REVIEW, ReviewPage(self._state))
         self.setPage(PAGE_DEDUPE_OPTION, DedupeOptionPage(self._state))
         self.setPage(PAGE_DEDUPE_SETUP, DedupeSetupPage(self._state))
@@ -68,8 +74,10 @@ class GeneratorWizard(QWizard):
         self.setStartId(PAGE_INTRO)
         self.currentIdChanged.connect(self._update_window_title)
         self.currentIdChanged.connect(self._sync_navigation_buttons)
+        self.currentIdChanged.connect(self._sync_window_resizability)
         self._update_window_title(self.startId())
         self._sync_navigation_buttons(self.startId())
+        self._sync_window_resizability(self.startId())
 
     def _cache_and_hide_page_titles(self) -> None:
         for page_id in self.pageIds():
@@ -83,7 +91,7 @@ class GeneratorWizard(QWizard):
         self.setWindowTitle("思政智题云枢")
 
     def _sync_navigation_buttons(self, page_id: int) -> None:
-        show_nav = page_id != PAGE_INTRO
+        show_nav = page_id not in (PAGE_INTRO, PAGE_WELCOME)
         self.setButtonLayout([] if not show_nav else self._default_button_layout)
         for which in (
             QWizard.WizardButton.BackButton,
@@ -94,6 +102,15 @@ class GeneratorWizard(QWizard):
             button = self.button(which)
             if button is not None:
                 button.setVisible(show_nav)
+
+    def _sync_window_resizability(self, page_id: int) -> None:
+        if page_id == PAGE_INTRO:
+            self.resize(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
+            self.setFixedSize(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
+            return
+
+        self.setMinimumSize(0, 0)
+        self.setMaximumSize(QT_MAX_WINDOW_SIZE, QT_MAX_WINDOW_SIZE)
 
     def accept(self) -> None:
         folder = None
@@ -127,6 +144,6 @@ def main() -> None:
         icon = QIcon(str(icon_path))
         if not icon.isNull():
             w.setWindowIcon(icon)
-    w.setFixedSize(976, 575)
+    w.resize(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
     w.show()
     raise SystemExit(app.exec())

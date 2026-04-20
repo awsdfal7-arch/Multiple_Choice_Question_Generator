@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Callable
 
+from sj_generator.ai.balance import describe_deepseek_balance, describe_kimi_balance, describe_qwen_balance
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -136,6 +137,8 @@ class _ApiConfigTab(QWidget):
         self._save_checkbox.setChecked(True)
         self._test_btn = QPushButton("测试 API")
         self._test_btn.clicked.connect(self._on_test_api)
+        self._balance_label = QLabel(self._initial_balance_text(cfg))
+        self._balance_label.setWordWrap(True)
         self._status = QLabel("未测试")
         self._status.setWordWrap(True)
         self._tested_key = self._cfg_key(cfg) if getattr(cfg, "is_ready", lambda: False)() else ""
@@ -152,6 +155,7 @@ class _ApiConfigTab(QWidget):
         layout = QVBoxLayout()
         layout.addLayout(form)
         layout.addWidget(self._test_btn)
+        layout.addWidget(self._balance_label)
         layout.addWidget(self._save_checkbox)
         layout.addWidget(self._status)
         layout.addStretch(1)
@@ -223,6 +227,7 @@ class _ApiConfigTab(QWidget):
             if "OK" not in (text or "").upper():
                 QMessageBox.warning(self, "测试失败", f"{self._title} API 测试未通过，返回：{text}")
                 self._status.setText("最近一次测试失败。")
+                self._balance_label.setText(self._initial_balance_text(cfg))
                 return
         except _ConfigValidationError as e:
             QMessageBox.warning(self, "参数不合法", str(e))
@@ -230,9 +235,11 @@ class _ApiConfigTab(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "测试失败", f"{self._title} API 测试失败：{e}")
             self._status.setText("最近一次测试失败。")
+            self._balance_label.setText(self._initial_balance_text(cfg) if "cfg" in locals() else "余额：未查询")
             return
         self._tested_key = self._cfg_key(cfg)
         self._status.setText(f"{self._title} API 测试通过。")
+        self._balance_label.setText(f"余额：{self._query_balance_text(cfg)}")
         QMessageBox.information(
             self,
             "测试通过",
@@ -249,6 +256,35 @@ class _ApiConfigTab(QWidget):
     def _reset_tested(self, *_args) -> None:
         self._tested_key = ""
         self._status.setText("配置已变更，需重新测试。")
+        try:
+            cfg = self._collect_cfg()
+        except Exception:
+            self._balance_label.setText("余额：未查询")
+            return
+        self._balance_label.setText(self._initial_balance_text(cfg))
+
+    def _initial_balance_text(self, cfg) -> str:
+        if isinstance(cfg, QwenConfig):
+            if cfg.has_account_balance_credentials():
+                return "余额：待查询"
+            if cfg.is_ready():
+                return "余额：未配置阿里云 AccessKey，暂无法查询"
+            return "余额：未配置"
+        if cfg.is_ready():
+            return "余额：待查询"
+        return "余额：未配置"
+
+    def _query_balance_text(self, cfg) -> str:
+        try:
+            if isinstance(cfg, DeepSeekConfig):
+                return describe_deepseek_balance(cfg)
+            if isinstance(cfg, KimiConfig):
+                return describe_kimi_balance(cfg)
+            if isinstance(cfg, QwenConfig):
+                return describe_qwen_balance(cfg)
+        except Exception as e:
+            return f"查询失败：{e}"
+        return "未配置"
 
 
 def _model_candidates(title: str) -> list[str]:
