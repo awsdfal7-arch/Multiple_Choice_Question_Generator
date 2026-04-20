@@ -55,7 +55,7 @@ pip install -r requirements.txt
 2. 启动应用
 
 ```bash
-python run_app.py
+python main.py
 ```
 
 ## 使用流程
@@ -94,7 +94,7 @@ sj_generator/
   ui/         # 向导页、配置对话框、界面状态
 docs/         # 需求、流程、数据格式说明
 test/         # 回归测试
-run_app.py    # 应用入口
+main.py       # 应用入口
 ```
 
 ## 主要依赖

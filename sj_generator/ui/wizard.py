@@ -75,7 +75,7 @@ class GeneratorWizard(QWizard):
         super().accept()
 
 
-def run_app() -> None:
+def main() -> None:
     app = QApplication(sys.argv)
     w = GeneratorWizard()
     w.resize(900, 320)
