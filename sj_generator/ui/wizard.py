@@ -1,8 +1,9 @@
 import sys
 import os
+from pathlib import Path
 
 from PyQt6.QtCore import QUrl
-from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtGui import QDesktopServices, QIcon
 from PyQt6.QtWidgets import QApplication, QMessageBox, QWizard
 
 from sj_generator.ui.state import WizardState
@@ -32,6 +33,14 @@ class GeneratorWizard(QWizard):
         super().__init__()
         self.setWindowTitle("思政智题云枢")
         self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
+        self._default_button_layout = [
+            QWizard.WizardButton.Stretch,
+            QWizard.WizardButton.BackButton,
+            QWizard.WizardButton.NextButton,
+            QWizard.WizardButton.FinishButton,
+            QWizard.WizardButton.CancelButton,
+        ]
+        self.setButtonLayout(self._default_button_layout)
 
         self.setButtonText(QWizard.WizardButton.BackButton, "上一步")
         self.setButtonText(QWizard.WizardButton.NextButton, "下一步")
@@ -58,7 +67,9 @@ class GeneratorWizard(QWizard):
         self._cache_and_hide_page_titles()
         self.setStartId(PAGE_INTRO)
         self.currentIdChanged.connect(self._update_window_title)
+        self.currentIdChanged.connect(self._sync_navigation_buttons)
         self._update_window_title(self.startId())
+        self._sync_navigation_buttons(self.startId())
 
     def _cache_and_hide_page_titles(self) -> None:
         for page_id in self.pageIds():
@@ -69,12 +80,20 @@ class GeneratorWizard(QWizard):
             page.setTitle("")
 
     def _update_window_title(self, page_id: int) -> None:
-        page = self.page(page_id)
-        page_title = page.property("_window_title_text").strip() if page is not None and page.property("_window_title_text") else ""
-        if page_title:
-            self.setWindowTitle(page_title)
-            return
         self.setWindowTitle("思政智题云枢")
+
+    def _sync_navigation_buttons(self, page_id: int) -> None:
+        show_nav = page_id != PAGE_INTRO
+        self.setButtonLayout([] if not show_nav else self._default_button_layout)
+        for which in (
+            QWizard.WizardButton.BackButton,
+            QWizard.WizardButton.NextButton,
+            QWizard.WizardButton.CancelButton,
+            QWizard.WizardButton.FinishButton,
+        ):
+            button = self.button(which)
+            if button is not None:
+                button.setVisible(show_nav)
 
     def accept(self) -> None:
         folder = None
@@ -98,7 +117,16 @@ class GeneratorWizard(QWizard):
 
 def main() -> None:
     app = QApplication(sys.argv)
+    icon_path = Path(__file__).resolve().parents[2] / "logo.png"
+    if icon_path.exists():
+        icon = QIcon(str(icon_path))
+        if not icon.isNull():
+            app.setWindowIcon(icon)
     w = GeneratorWizard()
-    w.resize(980, 680)
+    if icon_path.exists():
+        icon = QIcon(str(icon_path))
+        if not icon.isNull():
+            w.setWindowIcon(icon)
+    w.setFixedSize(976, 575)
     w.show()
     raise SystemExit(app.exec())
