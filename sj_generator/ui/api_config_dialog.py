@@ -28,6 +28,7 @@ from sj_generator.config import (
     save_deepseek_config,
     save_kimi_config,
     save_qwen_config,
+    set_user_environment_variable,
     to_kimi_llm_config,
     to_llm_config,
     to_qwen_llm_config,
@@ -67,16 +68,12 @@ class ApiConfigDialog(QDialog):
         tabs.addTab(self._kimi_tab, "Kimi")
         tabs.addTab(self._qwen_tab, "千问")
 
-        hint = QLabel("可以在一个窗口内统一配置三个模型；修改过的配置需先测试通过后才能保存。")
-        hint.setWordWrap(True)
-
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self._on_accept)
         buttons.rejected.connect(self.reject)
 
         layout = QVBoxLayout()
         layout.addWidget(tabs)
-        layout.addWidget(hint)
         layout.addWidget(buttons)
         self.setLayout(layout)
 
@@ -114,14 +111,26 @@ class _ApiConfigTab(QWidget):
         self._save_fn = save_fn
         self._to_llm_fn = to_llm_fn
         self._cfg_type = cfg_type
+        self._env_api_key = cfg.api_key.strip()
+        self._env_account_access_key_id = getattr(cfg, "account_access_key_id", "").strip()
+        self._env_account_access_key_secret = getattr(cfg, "account_access_key_secret", "").strip()
 
         self._base_url_edit = QLineEdit(cfg.base_url)
         self._model_edit = QComboBox()
         self._model_edit.setEditable(True)
         self._model_edit.addItems(_model_candidates(title))
         self._model_edit.setCurrentText(cfg.model)
-        self._api_key_edit = QLineEdit(cfg.api_key)
+        self._api_key_edit = QLineEdit(self._env_api_key)
         self._api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self._api_key_edit.setPlaceholderText("请输入 API Key")
+        self._account_access_key_id_edit: QLineEdit | None = None
+        self._account_access_key_secret_edit: QLineEdit | None = None
+        if isinstance(cfg, QwenConfig):
+            self._account_access_key_id_edit = QLineEdit(self._env_account_access_key_id)
+            self._account_access_key_id_edit.setPlaceholderText("请输入阿里云 AccessKey ID（非必填）")
+            self._account_access_key_secret_edit = QLineEdit(self._env_account_access_key_secret)
+            self._account_access_key_secret_edit.setEchoMode(QLineEdit.EchoMode.Password)
+            self._account_access_key_secret_edit.setPlaceholderText("请输入阿里云 AccessKey Secret（非必填）")
         self._timeout_edit = QLineEdit(str(cfg.timeout_s))
         self._save_checkbox = QCheckBox("保存到本机配置")
         self._save_checkbox.setChecked(True)
@@ -135,6 +144,9 @@ class _ApiConfigTab(QWidget):
         form.addRow("Base URL：", self._base_url_edit)
         form.addRow("Model：", self._model_edit)
         form.addRow("API Key：", self._api_key_edit)
+        if self._account_access_key_id_edit is not None and self._account_access_key_secret_edit is not None:
+            form.addRow("阿里云 AccessKey ID：", self._account_access_key_id_edit)
+            form.addRow("阿里云 AccessKey Secret：", self._account_access_key_secret_edit)
         form.addRow("超时(秒)：", self._timeout_edit)
 
         layout = QVBoxLayout()
@@ -149,6 +161,10 @@ class _ApiConfigTab(QWidget):
         self._model_edit.currentTextChanged.connect(self._reset_tested)
         self._api_key_edit.textChanged.connect(self._reset_tested)
         self._timeout_edit.textChanged.connect(self._reset_tested)
+        if self._account_access_key_id_edit is not None:
+            self._account_access_key_id_edit.textChanged.connect(self._reset_tested)
+        if self._account_access_key_secret_edit is not None:
+            self._account_access_key_secret_edit.textChanged.connect(self._reset_tested)
 
         if self._tested_key:
             self._status.setText("当前已加载可用配置。")
@@ -156,9 +172,10 @@ class _ApiConfigTab(QWidget):
     def save_if_needed(self) -> None:
         cfg = self._collect_cfg()
         cfg_key = self._cfg_key(cfg)
-        if cfg_key != self._tested_key:
+        if cfg.is_ready() and cfg_key != self._tested_key:
             raise _ConfigValidationError(f"{self._title} 配置已修改，请先点击“测试 API”并通过。")
         self._cfg = cfg
+        self._save_env_values(cfg)
         if self._save_checkbox.isChecked():
             self._save_fn(cfg)
 
@@ -175,12 +192,28 @@ class _ApiConfigTab(QWidget):
             model=self._model_edit.currentText().strip(),
             timeout_s=timeout_s,
         )
+        if isinstance(self._cfg, QwenConfig):
+            kwargs["account_access_key_id"] = (
+                self._account_access_key_id_edit.text().strip() if self._account_access_key_id_edit else ""
+            )
+            kwargs["account_access_key_secret"] = (
+                self._account_access_key_secret_edit.text().strip() if self._account_access_key_secret_edit else ""
+            )
         if isinstance(self._cfg, DeepSeekConfig):
             kwargs["analysis_model"] = self._cfg.analysis_model.strip()
         cfg = self._cfg_type(**kwargs)
         if not cfg.base_url or not cfg.model:
             raise _ConfigValidationError(f"{self._title} 的 Base URL 和 Model 不能为空。")
         return cfg
+
+    def _save_env_values(self, cfg) -> None:
+        set_user_environment_variable(_api_key_env_name(self._title), cfg.api_key.strip())
+        if isinstance(cfg, QwenConfig):
+            set_user_environment_variable("QWEN_ACCOUNT_ACCESS_KEY_ID", cfg.account_access_key_id.strip())
+            set_user_environment_variable("QWEN_ACCOUNT_ACCESS_KEY_SECRET", cfg.account_access_key_secret.strip())
+            # Keep the ali-cloud aliases in sync for current-user usage.
+            set_user_environment_variable("ALIBABA_CLOUD_ACCESS_KEY_ID", cfg.account_access_key_id.strip())
+            set_user_environment_variable("ALIBABA_CLOUD_ACCESS_KEY_SECRET", cfg.account_access_key_secret.strip())
 
     def _on_test_api(self) -> None:
         try:
@@ -239,3 +272,17 @@ def _model_candidates(title: str) -> list[str]:
             "qwen-turbo",
         ]
     return []
+
+
+def _api_key_env_name(title: str) -> str:
+    if title == "DeepSeek":
+        return "DEEPSEEK_API_KEY"
+    if title == "Kimi":
+        return "KIMI_API_KEY"
+    return "QWEN_API_KEY"
+
+
+def _masked_env_status(exists: bool, env_name: str) -> str:
+    if exists:
+        return f"已从环境变量 {env_name} 读取"
+    return f"未设置环境变量 {env_name}"

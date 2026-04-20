@@ -6,6 +6,7 @@ import time
 
 from openpyxl import Workbook, load_workbook
 
+from sj_generator.ai import balance as balance_mod
 from sj_generator.ai import import_questions as iq
 from sj_generator.ai.import_questions import ImportResult
 from sj_generator.ai.task_runner import run_tasks_in_parallel
@@ -105,6 +106,72 @@ def test_deepseek_analysis_model_defaults_and_persists(monkeypatch, tmp_path) ->
     cfg_mod.save_deepseek_config(updated)
     reloaded = cfg_mod.load_deepseek_config()
     assert reloaded.analysis_model == "deepseek-reasoner"
+    assert reloaded.api_key == ""
+
+
+def test_deepseek_api_key_only_reads_from_env_and_is_not_saved(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.delenv("SJ_GENERATOR_CONFIG_PATH", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+
+    cfg = cfg_mod.DeepSeekConfig(
+        base_url="https://api.deepseek.com",
+        api_key="sk-file",
+        model="deepseek-chat",
+        analysis_model="deepseek-reasoner",
+        timeout_s=60.0,
+    )
+    cfg_mod.save_deepseek_config(cfg)
+
+    saved = cfg_mod._read_json_dict(cfg_mod._config_path())
+    assert "api_key" not in saved
+    assert cfg_mod.load_deepseek_config().api_key == ""
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-env")
+    assert cfg_mod.load_deepseek_config().api_key == "sk-env"
+
+
+def test_qwen_account_balance_credentials_only_read_from_env_and_not_saved(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.delenv("SJ_GENERATOR_QWEN_CONFIG_PATH", raising=False)
+    monkeypatch.delenv("QWEN_BASE_URL", raising=False)
+    monkeypatch.delenv("QWEN_API_KEY", raising=False)
+    monkeypatch.delenv("QWEN_MODEL", raising=False)
+    monkeypatch.delenv("QWEN_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("QWEN_ACCOUNT_ACCESS_KEY_ID", raising=False)
+    monkeypatch.delenv("QWEN_ACCOUNT_ACCESS_KEY_SECRET", raising=False)
+    monkeypatch.delenv("ALIBABA_CLOUD_ACCESS_KEY_ID", raising=False)
+    monkeypatch.delenv("ALIBABA_CLOUD_ACCESS_KEY_SECRET", raising=False)
+
+    cfg = cfg_mod.QwenConfig(
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        api_key="dashscope-key",
+        model="qwen-max",
+        account_access_key_id="akid",
+        account_access_key_secret="aksecret",
+        timeout_s=60.0,
+    )
+    cfg_mod.save_qwen_config(cfg)
+
+    saved = cfg_mod._read_json_dict(cfg_mod._qwen_config_path())
+    assert "api_key" not in saved
+    assert "account_access_key_id" not in saved
+    assert "account_access_key_secret" not in saved
+
+    reloaded = cfg_mod.load_qwen_config()
+    assert reloaded.api_key == ""
+    assert reloaded.account_access_key_id == ""
+    assert reloaded.account_access_key_secret == ""
+    assert reloaded.has_account_balance_credentials() is False
+
+    monkeypatch.setenv("QWEN_API_KEY", "dashscope-env")
+    monkeypatch.setenv("QWEN_ACCOUNT_ACCESS_KEY_ID", "akid-env")
+    monkeypatch.setenv("QWEN_ACCOUNT_ACCESS_KEY_SECRET", "aksecret-env")
+    reloaded = cfg_mod.load_qwen_config()
+    assert reloaded.api_key == "dashscope-env"
+    assert reloaded.account_access_key_id == "akid-env"
+    assert reloaded.account_access_key_secret == "aksecret-env"
+    assert reloaded.has_account_balance_credentials() is True
 
 
 def test_compare_highlight_marks_minority_model() -> None:
@@ -172,6 +239,48 @@ def test_compare_highlight_uses_same_fingerprint_semantics_as_verdict() -> None:
         round_matched_count=2,
     )
     assert got == {"qwen": "red"}
+
+
+def test_build_deepseek_balance_url_supports_common_base_url_forms() -> None:
+    assert balance_mod._build_deepseek_balance_url("https://api.deepseek.com") == "https://api.deepseek.com/user/balance"
+    assert balance_mod._build_deepseek_balance_url("https://api.deepseek.com/v1") == "https://api.deepseek.com/user/balance"
+    assert (
+        balance_mod._build_deepseek_balance_url("https://api.deepseek.com/v1/chat/completions")
+        == "https://api.deepseek.com/user/balance"
+    )
+
+
+def test_format_deepseek_balance_infos_formats_currency_and_breakdown() -> None:
+    got = balance_mod._format_deepseek_balance_infos(
+        [
+            {
+                "currency": "CNY",
+                "total_balance": "110",
+                "granted_balance": "10",
+                "topped_up_balance": "100",
+            }
+        ]
+    )
+    assert got == ["CNY ¥110.00（赠送 ¥10.00，充值 ¥100.00）"]
+
+
+def test_build_kimi_balance_url_supports_common_base_url_forms() -> None:
+    assert balance_mod._build_kimi_balance_url("https://api.moonshot.cn") == "https://api.moonshot.cn/v1/users/me/balance"
+    assert balance_mod._build_kimi_balance_url("https://api.moonshot.cn/v1") == "https://api.moonshot.cn/v1/users/me/balance"
+    assert (
+        balance_mod._build_kimi_balance_url("https://api.moonshot.cn/v1/chat/completions")
+        == "https://api.moonshot.cn/v1/users/me/balance"
+    )
+
+
+def test_describe_kimi_balance_payload_supports_direct_balance_field() -> None:
+    got = balance_mod._describe_kimi_balance_payload({"balance": "15.5", "currency": "CNY"})
+    assert got == "已配置，余额 CNY ¥15.50"
+
+
+def test_describe_aliyun_account_balance_payload_supports_available_amount() -> None:
+    got = balance_mod._describe_aliyun_account_balance_payload({"Data": {"AvailableAmount": "123.4", "Currency": "CNY"}})
+    assert got == "已配置，阿里云账户余额 CNY ¥123.40"
 
 
 def test_run_analysis_tasks_supports_three_way_concurrency() -> None:

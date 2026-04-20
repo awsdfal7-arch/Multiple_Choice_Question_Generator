@@ -21,14 +21,21 @@ class QwenConfigDialog(QDialog):
         self.setWindowTitle("千问 配置")
 
         cfg = load_qwen_config()
+        self._env_api_key = cfg.api_key.strip()
 
         self._base_url_edit = QLineEdit(cfg.base_url)
         self._model_edit = QLineEdit(cfg.model)
-        self._api_key_edit = QLineEdit(cfg.api_key)
+        self._api_key_edit = QLineEdit()
         self._api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self._api_key_edit.setReadOnly(True)
+        self._api_key_edit.setPlaceholderText(
+            "已从环境变量 QWEN_API_KEY 读取" if self._env_api_key else "未设置环境变量 QWEN_API_KEY"
+        )
+        self._api_key_hint = QLineEdit("API Key 仅从环境变量 QWEN_API_KEY 读取")
+        self._api_key_hint.setReadOnly(True)
         self._timeout_edit = QLineEdit(str(cfg.timeout_s))
 
-        self._save_checkbox = QCheckBox("保存到本项目（.local/qwen.json）")
+        self._save_checkbox = QCheckBox("保存非敏感配置到本机")
         self._save_checkbox.setChecked(True)
         self._test_btn = QPushButton("测试 API")
         self._test_btn.clicked.connect(self._on_test_api)
@@ -38,6 +45,7 @@ class QwenConfigDialog(QDialog):
         form.addRow("Base URL：", self._base_url_edit)
         form.addRow("Model：", self._model_edit)
         form.addRow("API Key：", self._api_key_edit)
+        form.addRow("", self._api_key_hint)
         form.addRow("超时(秒)：", self._timeout_edit)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
@@ -54,7 +62,6 @@ class QwenConfigDialog(QDialog):
         self._cfg = cfg
         self._base_url_edit.textChanged.connect(self._reset_tested)
         self._model_edit.textChanged.connect(self._reset_tested)
-        self._api_key_edit.textChanged.connect(self._reset_tested)
         self._timeout_edit.textChanged.connect(self._reset_tested)
 
     def config(self) -> QwenConfig:
@@ -89,7 +96,7 @@ class QwenConfigDialog(QDialog):
             return None
         cfg = QwenConfig(
             base_url=self._base_url_edit.text().strip(),
-            api_key=self._api_key_edit.text().strip(),
+            api_key=self._env_api_key,
             model=self._model_edit.text().strip(),
             timeout_s=timeout_s,
         )

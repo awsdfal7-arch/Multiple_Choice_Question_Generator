@@ -184,9 +184,6 @@ class ProgramSettingsDialog(QDialog):
         form.addRow("", self._analysis_status)
         form.addRow("", self._auto_close_checkbox)
 
-        hint = QLabel("统一并发数同时用于 AI 导题与 AI 生成解析。建题库默认保存到设定中的题库目录。解析生成模型支持输入“服务商 / 模型名”，默认值为 DeepSeek / deepseek-reasoner。修改后需先测试通过才能保存。")
-        hint.setWordWrap(True)
-
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self._on_accept)
         buttons.rejected.connect(self.reject)
@@ -194,7 +191,6 @@ class ProgramSettingsDialog(QDialog):
 
         layout = QVBoxLayout()
         layout.addLayout(form)
-        layout.addWidget(hint)
         layout.addWidget(buttons)
         self.setLayout(layout)
 

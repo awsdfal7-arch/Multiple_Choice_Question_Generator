@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -36,10 +37,15 @@ class QwenConfig:
     base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     api_key: str = ""
     model: str = "qwen-max"
+    account_access_key_id: str = ""
+    account_access_key_secret: str = ""
     timeout_s: float = 120.0
 
     def is_ready(self) -> bool:
         return bool(self.api_key.strip() and self.base_url.strip() and self.model.strip())
+
+    def has_account_balance_credentials(self) -> bool:
+        return bool(self.account_access_key_id.strip() and self.account_access_key_secret.strip())
 
 
 def load_deepseek_config() -> DeepSeekConfig:
@@ -62,7 +68,7 @@ def load_deepseek_config() -> DeepSeekConfig:
 
     cfg = DeepSeekConfig(
         base_url=_clean_base_url(env_base_url or file_cfg.get("base_url") or DeepSeekConfig.base_url),
-        api_key=(env_api_key or file_cfg.get("api_key") or "").strip(),
+        api_key=env_api_key,
         model=(env_model or file_cfg.get("model") or DeepSeekConfig.model).strip(),
         analysis_model=(env_analysis_model or file_cfg.get("analysis_model") or DeepSeekConfig.analysis_model).strip(),
         timeout_s=timeout_s,
@@ -75,7 +81,6 @@ def save_deepseek_config(cfg: DeepSeekConfig) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     data = {
         "base_url": cfg.base_url.strip(),
-        "api_key": cfg.api_key.strip(),
         "model": cfg.model.strip(),
         "analysis_model": cfg.analysis_model.strip(),
         "timeout_s": cfg.timeout_s,
@@ -119,7 +124,7 @@ def load_kimi_config() -> KimiConfig:
 
     return KimiConfig(
         base_url=_clean_base_url(env_base_url or file_cfg.get("base_url") or KimiConfig.base_url),
-        api_key=(env_api_key or file_cfg.get("api_key") or "").strip(),
+        api_key=env_api_key,
         model=(env_model or file_cfg.get("model") or KimiConfig.model).strip(),
         timeout_s=timeout_s,
     )
@@ -130,7 +135,6 @@ def save_kimi_config(cfg: KimiConfig) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     data = {
         "base_url": _clean_base_url(cfg.base_url),
-        "api_key": cfg.api_key.strip(),
         "model": cfg.model.strip(),
         "timeout_s": cfg.timeout_s,
     }
@@ -150,6 +154,13 @@ def load_qwen_config() -> QwenConfig:
     env_base_url = os.getenv("QWEN_BASE_URL", "").strip()
     env_api_key = os.getenv("QWEN_API_KEY", "").strip()
     env_model = os.getenv("QWEN_MODEL", "").strip()
+    env_account_access_key_id = (
+        os.getenv("QWEN_ACCOUNT_ACCESS_KEY_ID", "").strip() or os.getenv("ALIBABA_CLOUD_ACCESS_KEY_ID", "").strip()
+    )
+    env_account_access_key_secret = (
+        os.getenv("QWEN_ACCOUNT_ACCESS_KEY_SECRET", "").strip()
+        or os.getenv("ALIBABA_CLOUD_ACCESS_KEY_SECRET", "").strip()
+    )
     env_timeout = os.getenv("QWEN_TIMEOUT_S", "").strip()
 
     file_cfg = _load_json_config_file(_qwen_config_path())
@@ -165,8 +176,10 @@ def load_qwen_config() -> QwenConfig:
 
     return QwenConfig(
         base_url=_clean_base_url(env_base_url or file_cfg.get("base_url") or QwenConfig.base_url),
-        api_key=(env_api_key or file_cfg.get("api_key") or "").strip(),
+        api_key=env_api_key,
         model=(env_model or file_cfg.get("model") or QwenConfig.model).strip(),
+        account_access_key_id=env_account_access_key_id,
+        account_access_key_secret=env_account_access_key_secret,
         timeout_s=timeout_s,
     )
 
@@ -176,7 +189,6 @@ def save_qwen_config(cfg: QwenConfig) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     data = {
         "base_url": _clean_base_url(cfg.base_url),
-        "api_key": cfg.api_key.strip(),
         "model": cfg.model.strip(),
         "timeout_s": cfg.timeout_s,
     }
@@ -189,6 +201,39 @@ def to_qwen_llm_config(cfg: QwenConfig) -> LlmConfig:
         api_key=cfg.api_key.strip(),
         model=cfg.model.strip(),
         timeout_s=float(cfg.timeout_s),
+    )
+
+
+def set_user_environment_variable(name: str, value: str) -> None:
+    value = (value or "").strip()
+    if value:
+        os.environ[name] = value
+    else:
+        os.environ.pop(name, None)
+
+    if sys.platform != "win32":
+        return
+
+    import ctypes
+    import winreg
+
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE) as key:
+        if value:
+            winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
+        else:
+            try:
+                winreg.DeleteValue(key, name)
+            except FileNotFoundError:
+                pass
+
+    HWND_BROADCAST = 0xFFFF
+    WM_SETTINGCHANGE = 0x001A
+    # Use async notify to avoid freezing the UI while other windows process the broadcast.
+    ctypes.windll.user32.SendNotifyMessageW(
+        HWND_BROADCAST,
+        WM_SETTINGCHANGE,
+        0,
+        "Environment",
     )
 
 

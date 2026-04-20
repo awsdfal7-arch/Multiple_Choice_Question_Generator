@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from sj_generator.ai.client import LlmClient
+from sj_generator.paths import common_mistakes_md_path
 
 
 @dataclass(frozen=True)
@@ -26,7 +27,7 @@ def generate_explanation(client: LlmClient, inp: ExplanationInputs) -> str:
 
     mistakes_text = ""
     if inp.include_common_mistakes and inp.root_dir is not None:
-        md = inp.root_dir / "common_mistakes" / "选择题常见错题归因与答题策略分析.md"
+        md = common_mistakes_md_path(inp.root_dir)
         if md.exists():
             mistakes_text = _read_text_limited(md, max_chars=12000)
 

@@ -114,7 +114,7 @@ class AiSelectFilesPage(QWizardPage):
 
         self._files_edit = QLineEdit()
         self._files_edit.setReadOnly(True)
-        self._files_edit.setPlaceholderText("选择待处理的 docx/txt 资料文件")
+        self._files_edit.setPlaceholderText("选择或把待处理的 docx/txt 资料文件拖动到此处")
 
         browse_btn = QPushButton("选择文件…")
         browse_btn.clicked.connect(self._browse)

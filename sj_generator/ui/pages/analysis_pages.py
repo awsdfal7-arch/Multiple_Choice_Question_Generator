@@ -30,6 +30,7 @@ from sj_generator.config import (
     to_qwen_llm_config,
 )
 from sj_generator.models import Question
+from sj_generator.paths import app_paths, common_mistakes_md_path
 from sj_generator.ui.state import (
     WizardState,
     normalize_ai_concurrency,
@@ -37,11 +38,6 @@ from sj_generator.ui.state import (
     normalize_analysis_provider,
 )
 from sj_generator.ui.constants import PAGE_AI_ANALYSIS, PAGE_EXPORT, PAGE_NAME
-
-
-def _common_mistakes_md_path(root_dir: Path) -> Path:
-    return root_dir / "common_mistakes" / "选择题常见错题归因与答题策略分析.md"
-
 
 def _analysis_provider_label(provider: str) -> str:
     labels = {"deepseek": "DeepSeek", "kimi": "Kimi", "qwen": "千问"}
@@ -63,14 +59,14 @@ class AiAnalysisOptionPage(QWizardPage):
         self._yes_radio.setChecked(True)
 
         root_dir = Path(__file__).resolve().parents[3]
-        ref_dir = root_dir / "reference"
+        ref_dir = app_paths(root_dir).reference_resource_dir
         ref_mds = sorted([p for p in ref_dir.glob("*.md")] if ref_dir.exists() else [], key=lambda p: p.name)
         has_reference_mds = len(ref_mds) > 0
-        self._ref_folder_checkbox = QCheckBox("自动参考 reference 文件夹内所有 md（如果存在）")
+        self._ref_folder_checkbox = QCheckBox("自动参考 reference/resource 文件夹内所有 md（如果存在）")
         self._ref_folder_checkbox.setChecked(has_reference_mds)
         self._ref_folder_checkbox.setEnabled(has_reference_mds)
 
-        has_mistakes = _common_mistakes_md_path(root_dir).exists()
+        has_mistakes = common_mistakes_md_path(root_dir).exists()
         self._mistakes_checkbox = QCheckBox("使用常见错题归因参考（如果存在）")
         self._mistakes_checkbox.setChecked(has_mistakes)
         self._mistakes_checkbox.setEnabled(has_mistakes)
@@ -93,14 +89,14 @@ class AiAnalysisOptionPage(QWizardPage):
         else:
             self._no_radio.setChecked(True)
         root_dir = Path(__file__).resolve().parents[3]
-        ref_dir = root_dir / "reference"
+        ref_dir = app_paths(root_dir).reference_resource_dir
         has_reference_mds = any(ref_dir.glob("*.md")) if ref_dir.exists() else False
         self._ref_folder_checkbox.setEnabled(has_reference_mds)
         if not has_reference_mds:
             self._ref_folder_checkbox.setChecked(False)
         else:
             self._ref_folder_checkbox.setChecked(self._state.analysis_use_reference_folder)
-        has_mistakes = _common_mistakes_md_path(root_dir).exists()
+        has_mistakes = common_mistakes_md_path(root_dir).exists()
         self._mistakes_checkbox.setEnabled(has_mistakes)
         if not has_mistakes:
             self._mistakes_checkbox.setChecked(False)
@@ -112,22 +108,22 @@ class AiAnalysisOptionPage(QWizardPage):
     def _sync_enabled_state(self) -> None:
         enabled = self._yes_radio.isChecked()
         root_dir = Path(__file__).resolve().parents[3]
-        ref_dir = root_dir / "reference"
+        ref_dir = app_paths(root_dir).reference_resource_dir
         has_reference_mds = any(ref_dir.glob("*.md")) if ref_dir.exists() else False
         self._ref_folder_checkbox.setEnabled(enabled and has_reference_mds)
         root_dir = Path(__file__).resolve().parents[3]
-        has_mistakes = _common_mistakes_md_path(root_dir).exists()
+        has_mistakes = common_mistakes_md_path(root_dir).exists()
         self._mistakes_checkbox.setEnabled(enabled and has_mistakes)
 
     def validatePage(self) -> bool:
         self._state.analysis_enabled = self._yes_radio.isChecked()
         root_dir = Path(__file__).resolve().parents[3]
-        ref_dir = root_dir / "reference"
+        ref_dir = app_paths(root_dir).reference_resource_dir
         has_reference_mds = any(ref_dir.glob("*.md")) if ref_dir.exists() else False
         self._state.analysis_use_reference_folder = (
             self._ref_folder_checkbox.isChecked() and has_reference_mds and self._state.analysis_enabled
         )
-        has_mistakes = _common_mistakes_md_path(root_dir).exists()
+        has_mistakes = common_mistakes_md_path(root_dir).exists()
         self._state.analysis_include_common_mistakes = (
             self._mistakes_checkbox.isChecked() and has_mistakes and self._state.analysis_enabled
         )
@@ -325,7 +321,7 @@ class AiAnalysisPage(QWizardPage):
         root_dir = Path(__file__).resolve().parents[3]
         ref_paths: list[Path] = []
         if self._state.analysis_use_reference_folder:
-            ref_dir = root_dir / "reference"
+            ref_dir = app_paths(root_dir).reference_resource_dir
             if ref_dir.exists():
                 ref_paths = sorted([p for p in ref_dir.glob("*.md")], key=lambda p: p.name)
         tasks = self._tasks

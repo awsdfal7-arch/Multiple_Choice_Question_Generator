@@ -1,3 +1,4 @@
+from .intro_pages import IntroPage
 from .welcome_pages import WelcomePage
 from .naming_pages import NamingPage
 from .project_pages import RepoPage, ModePage, ManualEntryPage
@@ -8,6 +9,7 @@ from .analysis_pages import AiAnalysisOptionPage, AiAnalysisPage
 from .export_pages import ExportPage
 
 __all__ = [
+    "IntroPage",
     "WelcomePage",
     "NamingPage",
     "RepoPage",

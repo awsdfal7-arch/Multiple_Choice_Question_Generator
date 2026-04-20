@@ -14,6 +14,7 @@ from sj_generator.io.excel_repo import save_questions
 from sj_generator.io.export_md import export_questions_to_markdown
 from sj_generator.io.source_reader import read_source_text
 from sj_generator.models import Question
+from sj_generator.paths import app_paths, common_mistakes_md_path
 
 
 _INVALID_FILENAME_CHARS = re.compile(r'[<>:"/\\\\|?*]+')
@@ -278,9 +279,9 @@ def _fill_missing_explanations(
     if not questions:
         return questions
     root_dir = Path(__file__).resolve().parents[2]
-    ref_dir = root_dir / "reference"
+    ref_dir = app_paths(root_dir).reference_resource_dir
     reference_md_paths = sorted(ref_dir.glob("*.md"), key=lambda p: p.name) if ref_dir.exists() else []
-    include_common_mistakes = (root_dir / "common_mistakes" / "选择题常见错题归因与答题策略分析.md").exists()
+    include_common_mistakes = common_mistakes_md_path(root_dir).exists()
 
     tasks = [(i, q) for i, q in enumerate(questions) if not q.analysis.strip()]
     if not tasks:

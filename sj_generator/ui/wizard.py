@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox, QWizard
 from sj_generator.ui.state import WizardState
 from sj_generator.ui.constants import *
 from sj_generator.ui.pages import (
+    IntroPage,
     WelcomePage,
     NamingPage,
     RepoPage,
@@ -29,7 +30,7 @@ from sj_generator.ui.pages import (
 class GeneratorWizard(QWizard):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("思政题目生成器")
+        self.setWindowTitle("思政智题云枢")
         self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
 
         self.setButtonText(QWizard.WizardButton.BackButton, "上一步")
@@ -38,6 +39,7 @@ class GeneratorWizard(QWizard):
         self.setButtonText(QWizard.WizardButton.FinishButton, "导出并打开文件夹")
 
         self._state = WizardState()
+        self.setPage(PAGE_INTRO, IntroPage())
         self.setPage(PAGE_WELCOME, WelcomePage(self._state))
         self.setPage(PAGE_REPO, RepoPage(self._state))
         self.setPage(PAGE_MODE, ModePage(self._state))
@@ -53,7 +55,26 @@ class GeneratorWizard(QWizard):
         self.setPage(PAGE_AI_ANALYSIS, AiAnalysisPage(self._state))
         self.setPage(PAGE_NAME, NamingPage(self._state))
         self.setPage(PAGE_EXPORT, ExportPage(self._state))
-        self.setStartId(PAGE_WELCOME)
+        self._cache_and_hide_page_titles()
+        self.setStartId(PAGE_INTRO)
+        self.currentIdChanged.connect(self._update_window_title)
+        self._update_window_title(self.startId())
+
+    def _cache_and_hide_page_titles(self) -> None:
+        for page_id in self.pageIds():
+            page = self.page(page_id)
+            if page is None:
+                continue
+            page.setProperty("_window_title_text", page.title())
+            page.setTitle("")
+
+    def _update_window_title(self, page_id: int) -> None:
+        page = self.page(page_id)
+        page_title = page.property("_window_title_text").strip() if page is not None and page.property("_window_title_text") else ""
+        if page_title:
+            self.setWindowTitle(page_title)
+            return
+        self.setWindowTitle("思政智题云枢")
 
     def accept(self) -> None:
         folder = None
@@ -78,6 +99,6 @@ class GeneratorWizard(QWizard):
 def main() -> None:
     app = QApplication(sys.argv)
     w = GeneratorWizard()
-    w.resize(900, 320)
+    w.resize(980, 680)
     w.show()
     raise SystemExit(app.exec())
