@@ -169,51 +169,15 @@ def replace_questions(path: Path, questions: Iterable[DbQuestionRecord]) -> None
     with sqlite3.connect(path) as conn:
         conn.execute(f"DROP TABLE IF EXISTS {TABLE_NAME}")
         _create_table(conn)
-        conn.executemany(
-            f"""
-            INSERT INTO {TABLE_NAME} (
-                id,
-                stem,
-                option_1,
-                option_2,
-                option_3,
-                option_4,
-                answer,
-                analysis,
-                question_type,
-                textbook_version,
-                source_filename,
-                level_path,
-                difficulty_score,
-                knowledge_points,
-                abilities,
-                created_at,
-                updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                (
-                    q.id,
-                    q.stem,
-                    q.option_1,
-                    q.option_2,
-                    q.option_3,
-                    q.option_4,
-                    q.answer,
-                    q.analysis,
-                    q.question_type,
-                    q.textbook_version,
-                    q.source_filename,
-                    q.level_path,
-                    q.difficulty_score,
-                    q.knowledge_points,
-                    q.abilities,
-                    q.created_at,
-                    q.updated_at,
-                )
-                for q in questions
-            ],
-        )
+        _insert_questions(conn, questions)
+        conn.commit()
+
+
+def append_questions(path: Path, questions: Iterable[DbQuestionRecord]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(path) as conn:
+        _create_table(conn)
+        _insert_questions(conn, questions)
         conn.commit()
 
 
@@ -240,6 +204,57 @@ def _create_table(conn: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL
         )
         """
+    )
+
+
+def _insert_questions(conn: sqlite3.Connection, questions: Iterable[DbQuestionRecord]) -> None:
+    rows = [
+        (
+            q.id,
+            q.stem,
+            q.option_1,
+            q.option_2,
+            q.option_3,
+            q.option_4,
+            q.answer,
+            q.analysis,
+            q.question_type,
+            q.textbook_version,
+            q.source_filename,
+            q.level_path,
+            q.difficulty_score,
+            q.knowledge_points,
+            q.abilities,
+            q.created_at,
+            q.updated_at,
+        )
+        for q in questions
+    ]
+    if not rows:
+        return
+    conn.executemany(
+        f"""
+        INSERT INTO {TABLE_NAME} (
+            id,
+            stem,
+            option_1,
+            option_2,
+            option_3,
+            option_4,
+            answer,
+            analysis,
+            question_type,
+            textbook_version,
+            source_filename,
+            level_path,
+            difficulty_score,
+            knowledge_points,
+            abilities,
+            created_at,
+            updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        rows,
     )
 
 

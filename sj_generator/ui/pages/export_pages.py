@@ -11,18 +11,18 @@ class ImportSuccessPage(QWizardPage):
         self.setTitle("完成")
         self.setFinalPage(True)
 
-        title = QLabel("导入数据库成功")
-        title.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
-        title.setStyleSheet("font-size: 22px; font-weight: 600;")
+        self._title = QLabel("导入数据库成功")
+        self._title.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
+        self._title.setStyleSheet("font-size: 22px; font-weight: 600;")
 
-        hint = QLabel("当前流程已完成。Markdown 导出请在开始界面的菜单栏中操作。")
-        hint.setWordWrap(True)
-        hint.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
+        self._hint = QLabel("")
+        self._hint.setWordWrap(True)
+        self._hint.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
 
         layout = QVBoxLayout()
         layout.addStretch(1)
-        layout.addWidget(title)
-        layout.addWidget(hint)
+        layout.addWidget(self._title)
+        layout.addWidget(self._hint)
         layout.addStretch(1)
         self.setLayout(layout)
 
@@ -30,6 +30,9 @@ class ImportSuccessPage(QWizardPage):
         w = self.wizard()
         if isinstance(w, QWizard):
             w.setButtonText(QWizard.WizardButton.FinishButton, "完成")
+        count = self._state.db_import_count
+        self._title.setText("导入数据库成功")
+        self._hint.setText(f"本次已写入当前总库 {count} 道题。Markdown 导出请在开始界面的菜单栏中操作。")
 
     def cleanupPage(self) -> None:
         w = self.wizard()

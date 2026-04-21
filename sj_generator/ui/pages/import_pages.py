@@ -763,6 +763,19 @@ class AiImportPage(QWizardPage):
             self._render_status()
             self.completeChanged.emit()
 
+    def prepare_to_close(self) -> bool:
+        thread = self._thread
+        if thread is None or (not thread.isRunning()):
+            return True
+        if self._worker is not None:
+            self._worker.request_stop()
+        self._stop_btn.setEnabled(False)
+        self._phase_text = "正在停止…"
+        self._stopped = True
+        self._render_status()
+        QMessageBox.information(self, "正在停止", "解析线程仍在收尾，请稍候片刻后再关闭窗口。")
+        return False
+
     def _retry(self) -> None:
         if self._running:
             return
@@ -979,6 +992,7 @@ class AiImportEditPage(QWizardPage):
             QMessageBox.warning(self, "没有可写入内容", "没有可写入的题目。")
             return False
         self._state.draft_questions = questions
+        self._state.reset_db_import()
         return True
 
     def _on_item_changed(self, item: QTableWidgetItem) -> None:

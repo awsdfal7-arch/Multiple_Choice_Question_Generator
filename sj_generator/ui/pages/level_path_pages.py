@@ -31,6 +31,8 @@ class AiLevelPathPage(QWizardPage):
         if not text:
             QMessageBox.warning(self, "未填写层级", "请填写导入题目的 level_path 归属。")
             return False
+        if text != self._state.ai_import_level_path:
+            self._state.reset_db_import()
         self._state.ai_import_level_path = text
         return True
 

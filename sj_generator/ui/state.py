@@ -65,3 +65,16 @@ class WizardState:
     analysis_model_name: str = DEFAULT_ANALYSIS_MODEL_NAME
     ai_concurrency: int = 3
     auto_close_after_finish: bool = True
+    db_import_completed: bool = False
+    db_import_count: int = 0
+    db_import_error: str = ""
+
+    def reset_db_import(self) -> None:
+        self.db_import_completed = False
+        self.db_import_count = 0
+        self.db_import_error = ""
+
+    def mark_db_import_completed(self, count: int) -> None:
+        self.db_import_completed = True
+        self.db_import_count = max(0, int(count))
+        self.db_import_error = ""

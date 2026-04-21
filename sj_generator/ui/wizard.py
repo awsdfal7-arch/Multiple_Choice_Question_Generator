@@ -4,27 +4,18 @@ from pathlib import Path
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication, QWizard
 
+from sj_generator.ui.import_flow_wizard import (
+    DEFAULT_WINDOW_HEIGHT,
+    DEFAULT_WINDOW_WIDTH,
+    QT_MAX_WINDOW_SIZE,
+    configure_import_flow_pages,
+)
 from sj_generator.ui.state import WizardState
 from sj_generator.ui.constants import *
 from sj_generator.ui.pages import (
     IntroPage,
     WelcomePage,
-    AiLevelPathPage,
-    AiSelectFilesPage,
-    AiImportPage,
-    AiImportEditPage,
-    ReviewPage,
-    DedupeOptionPage,
-    DedupeResultPage,
-    AiAnalysisOptionPage,
-    AiAnalysisPage,
-    ImportSuccessPage,
 )
-
-
-DEFAULT_WINDOW_WIDTH = 976
-DEFAULT_WINDOW_HEIGHT = 575
-QT_MAX_WINDOW_SIZE = 16777215
 
 
 class GeneratorWizard(QWizard):
@@ -49,16 +40,7 @@ class GeneratorWizard(QWizard):
         self._state = WizardState()
         self.setPage(PAGE_INTRO, IntroPage())
         self.setPage(PAGE_WELCOME, WelcomePage(self._state))
-        self.setPage(PAGE_AI_SELECT, AiSelectFilesPage(self._state))
-        self.setPage(PAGE_AI_IMPORT, AiImportPage(self._state))
-        self.setPage(PAGE_AI_IMPORT_EDIT, AiImportEditPage(self._state))
-        self.setPage(PAGE_AI_LEVEL_PATH, AiLevelPathPage(self._state))
-        self.setPage(PAGE_REVIEW, ReviewPage(self._state))
-        self.setPage(PAGE_DEDUPE_OPTION, DedupeOptionPage(self._state))
-        self.setPage(PAGE_DEDUPE_RESULT, DedupeResultPage(self._state))
-        self.setPage(PAGE_AI_ANALYSIS_OPTION, AiAnalysisOptionPage(self._state))
-        self.setPage(PAGE_AI_ANALYSIS, AiAnalysisPage(self._state))
-        self.setPage(PAGE_IMPORT_SUCCESS, ImportSuccessPage(self._state))
+        configure_import_flow_pages(self, self._state)
         self._cache_and_hide_page_titles()
         self.setStartId(PAGE_INTRO)
         self.currentIdChanged.connect(self._update_window_title)

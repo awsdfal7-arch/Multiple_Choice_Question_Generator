@@ -163,9 +163,11 @@ class WelcomePage(QWizardPage):
 
     def _enter_main_flow(self) -> None:
         self._state.start_mode = "wizard"
-        wizard = self.wizard()
-        if wizard is not None:
-            wizard.next()
+        from sj_generator.ui.import_flow_wizard import ImportFlowWizard
+
+        dlg = ImportFlowWizard(self._state, self)
+        if dlg.exec():
+            self._refresh_level_tree(preferred_level_path=self._state.ai_import_level_path)
 
     def _open_api_cfg(self) -> None:
         dlg = ApiConfigDialog(self)
@@ -229,13 +231,15 @@ class WelcomePage(QWizardPage):
         self._state.last_export_dir = md_path.parent
         QMessageBox.information(self, "导出完成", f"已导出 Markdown：\n{md_path}")
 
-    def _refresh_level_tree(self) -> None:
+    def _refresh_level_tree(self, preferred_level_path: str | None = None) -> None:
         self._folder_tree.clear()
         if not self._db_path.exists():
             return
 
         item_map: dict[tuple[str, ...], QTreeWidgetItem] = {}
         first_selectable_item: QTreeWidgetItem | None = None
+        preferred_item: QTreeWidgetItem | None = None
+        preferred_level_path = (preferred_level_path or "").strip()
         for level_path in list_level_paths(self._db_path):
             parts = self._parse_level_parts(level_path)
             if not parts:
@@ -258,11 +262,14 @@ class WelcomePage(QWizardPage):
                     item.setData(0, Qt.ItemDataRole.UserRole, level_path)
                     if first_selectable_item is None:
                         first_selectable_item = item
+                    if preferred_level_path and level_path == preferred_level_path:
+                        preferred_item = item
                 parent_item = item
 
-        if first_selectable_item is not None:
-            self._folder_tree.setCurrentItem(first_selectable_item)
-            self._expand_item_ancestors(first_selectable_item)
+        selected_item = preferred_item or first_selectable_item
+        if selected_item is not None:
+            self._folder_tree.setCurrentItem(selected_item)
+            self._expand_item_ancestors(selected_item)
         else:
             self._table.setRowCount(0)
             self._schedule_table_row_resize()

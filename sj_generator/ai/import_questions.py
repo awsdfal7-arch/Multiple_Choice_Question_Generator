@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from sj_generator.ai.client import LlmClient
+from sj_generator.ai.task_runner import run_tasks_in_parallel
 from sj_generator.models import Question
 
 
@@ -149,6 +150,7 @@ def _import_questions_per_question(
                     total=n,
                     progress_cb=progress_cb,
                     compare_cb=compare_cb,
+                    stop_cb=stop_cb,
                 )
                 step += 1
                 if progress_count_cb:
@@ -157,6 +159,7 @@ def _import_questions_per_question(
                     index=i,
                     obj=obj,
                     err=err,
+                    meta=meta,
                     progress_cb=progress_cb,
                     source_name=path.name,
                     items=items,
@@ -169,44 +172,67 @@ def _import_questions_per_question(
         if client_factory is None or kimi_client_factory is None or qwen_client_factory is None:
             raise ValueError("题级并发需要提供三模型客户端工厂。")
 
-        with ThreadPoolExecutor(max_workers=min(worker_count, n)) as ex:
-            fut_map = {
-                ex.submit(
-                    _process_one_question,
-                    client=client_factory(),
-                    kimi_client=kimi_client_factory(),
-                    qwen_client=qwen_client_factory(),
-                    source_name=path.name,
-                    chunk_text=text,
-                    index=i,
-                    total=n,
-                    progress_cb=progress_cb,
-                    compare_cb=compare_cb,
-                ): i
-                for i in range(1, n + 1)
-                if not (stop_cb and stop_cb())
-            }
-            results_by_index: dict[int, tuple[dict[str, Any], bool, dict[str, Any]]] = {}
-            for fut in as_completed(fut_map):
-                i = fut_map[fut]
-                obj, err, meta = fut.result()
-                results_by_index[i] = (obj, err, meta)
-                step += 1
-                if progress_count_cb:
-                    progress_count_cb(step, total_steps)
-            for i in sorted(results_by_index.keys()):
-                obj, err, meta = results_by_index[i]
-                _collect_question_result(
-                    index=i,
-                    obj=obj,
-                    err=err,
-                    progress_cb=progress_cb,
-                    source_name=path.name,
-                    items=items,
-                    normalized=normalized,
-                    seen=seen,
-                    question_cb=question_cb,
-                )
+        task_items = [(i, path.name, text) for i in range(1, n + 1)]
+        results_by_index: dict[int, tuple[dict[str, Any], bool, dict[str, Any]]] = {}
+
+        def on_task_start(_current: int, _total_count: int, _task: tuple[int, str, str]) -> None:
+            return
+
+        def on_task_done(task: tuple[int, str, str], result: tuple[dict[str, Any], bool, dict[str, Any]]) -> None:
+            nonlocal step
+            index, _source_name, _chunk_text = task
+            results_by_index[index] = result
+            step += 1
+            if progress_count_cb:
+                progress_count_cb(step, total_steps)
+
+        def on_task_failed(task: tuple[int, str, str], exc: Exception) -> None:
+            nonlocal step
+            index, _source_name, _chunk_text = task
+            results_by_index[index] = ({}, True, {"index": index, "accepted": False, "reason": str(exc)})
+            step += 1
+            if progress_count_cb:
+                progress_count_cb(step, total_steps)
+
+        def run_one(task: tuple[int, str, str]) -> tuple[dict[str, Any], bool, dict[str, Any]]:
+            index, source_name, chunk_text = task
+            return _process_one_question(
+                client=client_factory(),
+                kimi_client=kimi_client_factory(),
+                qwen_client=qwen_client_factory(),
+                source_name=source_name,
+                chunk_text=chunk_text,
+                index=index,
+                total=n,
+                progress_cb=progress_cb,
+                compare_cb=compare_cb,
+                stop_cb=stop_cb,
+            )
+
+        run_tasks_in_parallel(
+            tasks=task_items,
+            max_workers=min(worker_count, n),
+            stop_cb=(stop_cb or (lambda: False)),
+            on_task_start=on_task_start,
+            on_task_done=on_task_done,
+            on_task_failed=on_task_failed,
+            run_one=run_one,
+        )
+
+        for i in sorted(results_by_index.keys()):
+            obj, err, meta = results_by_index[i]
+            _collect_question_result(
+                index=i,
+                obj=obj,
+                err=err,
+                meta=meta,
+                progress_cb=progress_cb,
+                source_name=path.name,
+                items=items,
+                normalized=normalized,
+                seen=seen,
+                question_cb=question_cb,
+            )
 
     return ImportResult(questions=normalized, raw_items=items)
 
@@ -222,6 +248,7 @@ def _process_one_question(
     total: int,
     progress_cb: Callable[[str], None] | None,
     compare_cb: Callable[[dict[str, Any]], None] | None,
+    stop_cb: Callable[[], bool] | None,
 ) -> tuple[dict[str, Any], bool, dict[str, Any]]:
     def bump(model_name: str, round_no: int, check_no: int) -> None:
         if progress_cb:
@@ -248,6 +275,7 @@ def _process_one_question(
         attempt_cb=bump,
         round_cb=mark_round,
         compare_cb=compare_cb,
+        stop_cb=stop_cb,
     )
 
 
@@ -256,6 +284,7 @@ def _collect_question_result(
     index: int,
     obj: dict[str, Any],
     err: bool,
+    meta: dict[str, Any],
     progress_cb: Callable[[str], None] | None,
     source_name: str,
     items: list[dict[str, Any]],
@@ -264,6 +293,8 @@ def _collect_question_result(
     question_cb: Callable[[Question], None] | None,
 ) -> None:
     if err:
+        if str(meta.get("reason") or "").strip().lower() == "stopped":
+            return
         if progress_cb:
             progress_cb(f"{source_name}：第 {index} 题解析有误，已跳过。")
         return
@@ -501,6 +532,7 @@ def _get_question_n_verified(
     attempt_cb: Callable[[str, int, int], None] | None = None,
     round_cb: Callable[[int, str], None] | None = None,
     compare_cb: Callable[[dict[str, Any]], None] | None = None,
+    stop_cb: Callable[[], bool] | None = None,
 ) -> tuple[dict[str, Any], bool, dict[str, Any]]:
     if kimi_client is None or qwen_client is None:
         return {}, True, {"index": index, "accepted": False, "reason": "missing_clients"}
@@ -508,6 +540,8 @@ def _get_question_n_verified(
     last_meta: dict[str, Any] = {"index": index, "accepted": False, "reason": "inconsistent"}
     cumulative_valid_objs: list[dict[str, Any]] = []
     for round_no in range(1, 4):
+        if stop_cb and stop_cb():
+            return {}, True, {"index": index, "accepted": False, "reason": "stopped"}
         if round_cb:
             round_cb(round_no, "start")
         results: dict[str, dict[str, Any]] = {"DeepSeek": {}, "Kimi": {}, "千问": {}}

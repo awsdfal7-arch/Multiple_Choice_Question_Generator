@@ -29,6 +29,7 @@ from sj_generator.config import (
     to_kimi_llm_config,
     to_qwen_llm_config,
 )
+from sj_generator.io.draft_db_import import import_draft_questions_to_db
 from sj_generator.models import Question
 from sj_generator.paths import app_paths, common_mistakes_md_path
 from sj_generator.ui.state import (
@@ -39,6 +40,8 @@ from sj_generator.ui.state import (
 )
 from sj_generator.ui.constants import PAGE_AI_ANALYSIS, PAGE_IMPORT_SUCCESS
 
+DEFAULT_LIBRARY_DB_PATH = Path(__file__).resolve().parents[3] / "converted_db" / "思政题库.db"
+
 def _analysis_provider_label(provider: str) -> str:
     labels = {"deepseek": "DeepSeek", "kimi": "Kimi", "qwen": "千问"}
     return labels.get(normalize_analysis_provider(provider), "DeepSeek")
@@ -46,6 +49,36 @@ def _analysis_provider_label(provider: str) -> str:
 
 def _analysis_target_text(provider: str, model_name: str) -> str:
     return f"{_analysis_provider_label(provider)} / {normalize_analysis_model_name(model_name)}"
+
+
+def _commit_draft_questions_to_db(page: QWizardPage, state: WizardState) -> bool:
+    if state.db_import_completed:
+        return True
+
+    questions = list(state.draft_questions)
+    if not questions:
+        QMessageBox.warning(page, "无法导入数据库", "当前草稿为空，无法写入数据库。")
+        return False
+
+    level_path = state.ai_import_level_path.strip()
+    if not level_path:
+        QMessageBox.warning(page, "无法导入数据库", "未填写层级归属，无法写入数据库。")
+        return False
+
+    try:
+        count = import_draft_questions_to_db(
+            db_path=DEFAULT_LIBRARY_DB_PATH,
+            questions=questions,
+            level_path=level_path,
+            source_files=state.ai_source_files or [],
+        )
+    except Exception as e:
+        state.db_import_error = str(e)
+        QMessageBox.critical(page, "导入数据库失败", str(e))
+        return False
+
+    state.mark_db_import_completed(count)
+    return True
 
 
 class AiAnalysisOptionPage(QWizardPage):
@@ -127,6 +160,8 @@ class AiAnalysisOptionPage(QWizardPage):
         self._state.analysis_include_common_mistakes = (
             self._mistakes_checkbox.isChecked() and has_mistakes and self._state.analysis_enabled
         )
+        if not self._state.analysis_enabled:
+            return _commit_draft_questions_to_db(self, self._state)
         return True
 
     def nextId(self) -> int:
@@ -212,7 +247,9 @@ class AiAnalysisPage(QWizardPage):
         return self._done and (not self._running)
 
     def validatePage(self) -> bool:
-        return (not self._running) and self._done
+        if self._running or (not self._done):
+            return False
+        return _commit_draft_questions_to_db(self, self._state)
 
     def _refresh_status(self) -> None:
         self._stop_btn.setEnabled(self._running)
@@ -375,6 +412,18 @@ class AiAnalysisPage(QWizardPage):
         self._status_label.setText("正在停止…")
         self._current_label.setText("")
 
+    def prepare_to_close(self) -> bool:
+        thread = self._thread
+        if thread is None or (not thread.isRunning()):
+            return True
+        if self._worker is not None:
+            self._worker.request_stop()
+        self._stop_btn.setEnabled(False)
+        self._status_label.setText("正在停止…")
+        self._current_label.setText("")
+        QMessageBox.information(self, "正在停止", "当前解析线程仍在收尾，请稍候片刻后再关闭窗口。")
+        return False
+
     def _on_batch_progress(self, cur: int, total: int) -> None:
         self._progress.setRange(0, total)
         self._progress.setValue(max(0, min(cur, total)))
@@ -419,6 +468,7 @@ class AiAnalysisPage(QWizardPage):
             questions.append(Question(number=number, stem=stem, options=options, answer=answer, analysis=analysis))
 
         self._state.draft_questions = questions
+        self._state.reset_db_import()
 
         self._progress.setValue(self._progress.maximum())
         self._tasks = self._collect_tasks()

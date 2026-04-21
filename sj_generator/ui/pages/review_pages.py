@@ -81,6 +81,7 @@ class ReviewPage(QWizardPage):
             )
 
         self._state.draft_questions = questions
+        self._state.reset_db_import()
         QMessageBox.information(self, "已保存", "已保存到当前草稿。")
 
     def _set_item(self, row: int, col: int, text: str) -> None:
