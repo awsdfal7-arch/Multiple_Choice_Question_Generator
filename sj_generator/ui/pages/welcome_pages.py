@@ -9,7 +9,7 @@ import shutil
 from uuid import uuid4
 
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QWheelEvent
+from PyQt6.QtGui import QShowEvent, QWheelEvent
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -1326,6 +1326,10 @@ class _QuestionEditDialog(QDialog):
         )
         if answer == QMessageBox.StandardButton.Yes:
             self.done(self.DELETE_RESULT)
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        print(f"{self.windowTitle()}窗口大小：{self.width()} x {self.height()}")
 
     def _sync_choice_fields_visibility(self, question_type: str) -> None:
         normalized_type = (question_type or "").strip()

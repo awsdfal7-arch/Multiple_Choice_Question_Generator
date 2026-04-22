@@ -62,7 +62,6 @@ def _sanitize_filename(name: str) -> str:
     return s
 
 
-DEFAULT_SOURCE_VERSION = "2026年春"
 LEVEL_PATH_RE = re.compile(r"^\d+\.\d+\.\d+$")
 LEVEL_PATH_EDIT_RE = QRegularExpression(r"\d*(?:\.\d*(?:\.\d*)?)?")
 
@@ -316,7 +315,7 @@ class AiSelectFilesPage(QWizardPage):
         for index, path in enumerate(paths):
             raw_path = str(path)
             existing = existing_map.get(raw_path, AiSourceFileItem(path=raw_path))
-            default_version = existing.version or DEFAULT_SOURCE_VERSION
+            default_version = existing.version or self._state.preferred_textbook_version
             updated_items.append(
                 AiSourceFileItem(path=raw_path, version=default_version, level_path=existing.level_path)
             )
@@ -356,7 +355,7 @@ class AiSelectFilesPage(QWizardPage):
             return
         version_item = self._files_table.item(row, 1)
         level_item = self._files_table.item(row, 2)
-        version = (version_item.text() if version_item else "").strip() or DEFAULT_SOURCE_VERSION
+        version = (version_item.text() if version_item else "").strip() or self._state.preferred_textbook_version
         if version_item is not None and version_item.text().strip() != version:
             self._files_table.blockSignals(True)
             version_item.setText(version)
@@ -393,7 +392,7 @@ class AiSelectFilesPage(QWizardPage):
                 continue
             version = (
                 (self._files_table.item(row, 1).text() if self._files_table.item(row, 1) else "").strip()
-                or DEFAULT_SOURCE_VERSION
+                or self._state.preferred_textbook_version
             )
             level_path = (self._files_table.item(row, 2).text() if self._files_table.item(row, 2) else "").strip()
             items.append(AiSourceFileItem(path=raw_path, version=version, level_path=level_path))

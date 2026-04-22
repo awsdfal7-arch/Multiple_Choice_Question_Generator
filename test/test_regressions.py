@@ -13,6 +13,7 @@ from sj_generator.ai.import_questions import ImportResult
 from sj_generator.ai.task_runner import run_tasks_in_parallel
 from sj_generator.io import batch_ai_import as batch_ai
 from sj_generator.io.batch_folderize import process_excel_to_folder_mode
+from sj_generator.io.draft_db_import import draft_questions_to_db_records
 from sj_generator.io.export_md import _normalize_numbers, export_questions_to_markdown
 from sj_generator.models import Question
 from sj_generator import config as cfg_mod
@@ -160,6 +161,7 @@ def test_program_settings_persist_round_trip(monkeypatch, tmp_path) -> None:
             "analysis_provider": "kimi",
             "analysis_model_name": "kimi-k2-turbo-preview",
             "export_convertible_multi_mode": "as_multi",
+            "preferred_textbook_version": "必修二",
         }
     )
 
@@ -171,6 +173,7 @@ def test_program_settings_persist_round_trip(monkeypatch, tmp_path) -> None:
         "analysis_provider": "kimi",
         "analysis_model_name": "kimi-k2-turbo-preview",
         "export_convertible_multi_mode": "as_multi",
+        "preferred_textbook_version": "必修二",
     }
 
 
@@ -178,6 +181,17 @@ def test_welcome_table_font_point_size_persists_round_trip(monkeypatch, tmp_path
     monkeypatch.setenv("APPDATA", str(tmp_path))
     cfg_mod.save_welcome_table_font_point_size(15)
     assert cfg_mod.load_welcome_table_font_point_size() == 15
+
+
+def test_draft_questions_to_db_records_applies_textbook_version_preference() -> None:
+    records = draft_questions_to_db_records(
+        questions=[Question(number="1", stem="题目", options="A.甲\nB.乙", answer="A", analysis="")],
+        level_path="1.1.1",
+        textbook_version="必修三",
+    )
+
+    assert len(records) == 1
+    assert records[0].textbook_version == "必修三"
 
 
 def test_deepseek_analysis_model_defaults_and_persists(monkeypatch, tmp_path) -> None:
