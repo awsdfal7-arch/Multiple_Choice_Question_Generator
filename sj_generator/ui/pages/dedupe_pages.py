@@ -17,18 +17,19 @@ from PyQt6.QtWidgets import (
     QWizardPage,
 )
 
-from sj_generator.io.dedupe import (
+from sj_generator.application.dedupe.service import (
     DedupeHit,
     dedupe_between_questions_and_db,
 )
-from sj_generator.io.sqlite_repo import DbQuestionRecord, load_all_questions
-from sj_generator.models import Question
-from sj_generator.ui.state import WizardState, library_db_path_from_repo_parent_dir_text
+from sj_generator.infrastructure.persistence.sqlite_repo import DbQuestionRecord, load_all_questions
+from sj_generator.domain.entities import Question
+from sj_generator.ui.import_db_service import commit_draft_questions_to_db
+from sj_generator.ui.table_copy import CopyableTableWidget
+from sj_generator.application.state import WizardState, library_db_path_from_repo_parent_dir_text
 from sj_generator.ui.constants import (
     PAGE_AI_ANALYSIS,
     PAGE_IMPORT_SUCCESS,
 )
-from sj_generator.ui.pages.analysis_pages import _commit_draft_questions_to_db
 
 BUTTON_MIN_WIDTH = 96
 BUTTON_MIN_HEIGHT = 36
@@ -138,7 +139,7 @@ class DedupeResultPage(QWizardPage):
         self._status_label = QLabel("")
         self._status_label.setWordWrap(True)
 
-        self._table = QTableWidget()
+        self._table = CopyableTableWidget()
         self._table.setColumnCount(5)
         self._table.setHorizontalHeaderLabels(["当前题目", "当前序号", "库内来源", "所属层级", "相似度"])
         self._table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
@@ -217,7 +218,7 @@ class DedupeResultPage(QWizardPage):
 
     def validatePage(self) -> bool:
         if not self._state.analysis_enabled:
-            return _commit_draft_questions_to_db(self, self._state)
+            return commit_draft_questions_to_db(self, self._state)
         return True
 
     def nextId(self) -> int:
@@ -311,7 +312,7 @@ class DedupeResultPage(QWizardPage):
                     for record in records
                 ]
             else:
-                from sj_generator.io.excel_repo import load_questions
+                from sj_generator.infrastructure.persistence.excel_repo import load_questions
 
                 qs = load_questions(p)
         self._questions_cache[p] = qs

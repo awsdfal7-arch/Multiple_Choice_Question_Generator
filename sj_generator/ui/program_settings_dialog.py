@@ -17,16 +17,14 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
-from sj_generator.config import save_program_settings
-from sj_generator.ui.state import (
-    AI_CONCURRENCY_OPTIONS,
+from sj_generator.application.settings import save_program_settings_merged
+from sj_generator.application.state import (
     WizardState,
     normalize_export_convertible_multi_mode,
     normalize_export_include_answers,
     normalize_export_include_analysis,
     normalize_default_repo_parent_dir_text,
     normalize_import_source_dir_text,
-    normalize_ai_concurrency,
     normalize_analysis_model_name,
     normalize_analysis_provider,
     normalize_preferred_textbook_version,
@@ -34,7 +32,7 @@ from sj_generator.ui.state import (
     default_import_source_dir,
     desktop_import_source_dir,
 )
-from sj_generator.io.sqlite_repo import load_all_questions
+from sj_generator.infrastructure.persistence.sqlite_repo import load_all_questions
 
 SECTION_GENERAL = "general"
 SECTION_IMPORT = "import"
@@ -89,13 +87,6 @@ class ProgramSettingsDialog(QDialog):
         self.setWindowTitle(self._dialog_title())
         self.resize(500, 260)
 
-        self._concurrency_combo = QComboBox()
-        for value in AI_CONCURRENCY_OPTIONS:
-            self._concurrency_combo.addItem(str(value), value)
-        idx = self._concurrency_combo.findData(normalize_ai_concurrency(self._state.ai_concurrency))
-        if idx >= 0:
-            self._concurrency_combo.setCurrentIndex(idx)
-
         self._dedupe_checkbox = QCheckBox("导入流程默认执行库内查重")
         self._dedupe_checkbox.setChecked(bool(self._state.dedupe_enabled))
 
@@ -105,6 +96,8 @@ class ProgramSettingsDialog(QDialog):
         analysis_idx = self._import_analysis_combo.findData(bool(self._state.analysis_enabled))
         if analysis_idx >= 0:
             self._import_analysis_combo.setCurrentIndex(analysis_idx)
+        self._import_show_costs_checkbox = QCheckBox("导入完成时显示本次 docx 解析费用")
+        self._import_show_costs_checkbox.setChecked(bool(self._state.import_show_costs))
 
         self._convertible_multi_export_combo = QComboBox()
         self._convertible_multi_export_combo.addItem("保留组合映射", "keep_combo")
@@ -166,10 +159,10 @@ class ProgramSettingsDialog(QDialog):
             form.addRow("默认题库保存位置：", default_repo_row)
             form.addRow("题目版本首选项：", self._preferred_textbook_version_combo)
         elif self._section == SECTION_IMPORT:
-            form.addRow("统一并发数：", self._concurrency_combo)
             form.addRow("默认导入目录：", import_source_dir_row)
             form.addRow("导入文档时解析生成：", self._import_analysis_combo)
             form.addRow("", self._dedupe_checkbox)
+            form.addRow("", self._import_show_costs_checkbox)
         else:
             form.addRow("可转多选 Markdown 导出：", self._convertible_multi_export_combo)
             form.addRow("导出 Markdown/PDF：", self._export_include_answers_checkbox)
@@ -199,10 +192,10 @@ class ProgramSettingsDialog(QDialog):
                 self._preferred_textbook_version_combo.currentText()
             )
         elif self._section == SECTION_IMPORT:
-            self._state.ai_concurrency = normalize_ai_concurrency(self._concurrency_combo.currentData())
             self._state.import_source_dir_text = normalize_import_source_dir_text(self._import_source_dir_edit.text())
             self._state.analysis_enabled = bool(self._import_analysis_combo.currentData())
             self._state.dedupe_enabled = self._dedupe_checkbox.isChecked()
+            self._state.import_show_costs = self._import_show_costs_checkbox.isChecked()
             if not self._state.dedupe_enabled:
                 self._state.dedupe_hits = None
         else:
@@ -226,7 +219,7 @@ class ProgramSettingsDialog(QDialog):
         return "常规设定"
 
     def _save_program_settings(self) -> None:
-        save_program_settings(
+        save_program_settings_merged(
             {
                 "default_repo_parent_dir_text": normalize_default_repo_parent_dir_text(
                     self._state.default_repo_parent_dir_text
@@ -234,8 +227,8 @@ class ProgramSettingsDialog(QDialog):
                 "import_source_dir_text": normalize_import_source_dir_text(
                     self._state.import_source_dir_text
                 ),
-                "ai_concurrency": normalize_ai_concurrency(self._state.ai_concurrency),
                 "analysis_enabled": bool(self._state.analysis_enabled),
+                "import_show_costs": bool(self._state.import_show_costs),
                 "dedupe_enabled": bool(self._state.dedupe_enabled),
                 "analysis_provider": normalize_analysis_provider(self._state.analysis_provider),
                 "analysis_model_name": normalize_analysis_model_name(self._state.analysis_model_name),

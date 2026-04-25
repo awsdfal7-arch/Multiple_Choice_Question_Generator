@@ -1,27 +1,30 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 import json
 import threading
 import time
 
 from openpyxl import Workbook, load_workbook
-from sj_generator.io.sqlite_repo import DbQuestionRecord, append_questions, delete_question_by_id, load_all_questions
+import pytest
+from sj_generator.infrastructure.persistence.sqlite_repo import DbQuestionRecord, append_questions, delete_question_by_id, load_all_questions
 
 from sj_generator.ai import balance as balance_mod
 from sj_generator.ai import import_questions as iq
 from sj_generator.ai import prompt_templates as prompt_mod
-from sj_generator.ai.client import _pick_temperature
-from sj_generator.ai.import_questions import ImportResult
-from sj_generator.ai.task_runner import run_tasks_in_parallel
+from sj_generator.infrastructure.llm.client import _pick_temperature
+from sj_generator.infrastructure.llm.import_questions import ImportResult
+from sj_generator.infrastructure.llm.task_runner import run_callables_in_parallel_fail_fast, run_tasks_in_parallel
 from sj_generator.io import batch_ai_import as batch_ai
-from sj_generator.io.batch_folderize import process_excel_to_folder_mode
-from sj_generator.io.draft_db_import import draft_questions_to_db_records
-from sj_generator.io.export_md import _normalize_numbers, export_questions_to_markdown
-from sj_generator.models import Question
+from sj_generator.application.exporting.batch_folderize import process_excel_to_folder_mode
+from sj_generator.infrastructure.persistence.draft_db_import import draft_questions_to_db_records
+from sj_generator.infrastructure.exporting.export_md import _normalize_numbers, export_questions_to_markdown
+from sj_generator.domain.entities import Question
 from sj_generator import config as cfg_mod
 from sj_generator.ui.compare_highlight import compare_highlight_model_styles
-from sj_generator.ui.state import (
+from sj_generator.ui.import_costs import capture_import_cost_before, freeze_import_cost_result
+from sj_generator.application.state import (
     WizardState,
     default_repo_parent_dir,
     normalize_default_repo_parent_dir_text,
@@ -122,6 +125,7 @@ def test_program_settings_persist_round_trip(monkeypatch, tmp_path) -> None:
             "default_repo_parent_dir_text": "C:/repo-root",
             "ai_concurrency": 4,
             "analysis_enabled": False,
+            "import_show_costs": False,
             "dedupe_enabled": True,
             "analysis_provider": "kimi",
             "analysis_model_name": "kimi-k2-turbo-preview",
@@ -136,6 +140,7 @@ def test_program_settings_persist_round_trip(monkeypatch, tmp_path) -> None:
         "default_repo_parent_dir_text": "C:/repo-root",
         "ai_concurrency": 4,
         "analysis_enabled": False,
+        "import_show_costs": False,
         "dedupe_enabled": True,
         "analysis_provider": "kimi",
         "analysis_model_name": "kimi-k2-turbo-preview",
@@ -143,6 +148,49 @@ def test_program_settings_persist_round_trip(monkeypatch, tmp_path) -> None:
         "export_include_answers": False,
         "export_include_analysis": True,
         "preferred_textbook_version": "必修二",
+    }
+
+
+def test_save_program_settings_merged_preserves_existing_values(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.delenv("SJ_GENERATOR_PROGRAM_SETTINGS_PATH", raising=False)
+
+    cfg_mod.save_program_settings(
+        {
+            "analysis_provider": "deepseek",
+            "analysis_model_name": "deepseek-reasoner",
+            "project_parse_model_rows": [
+                {
+                    "key": "question_number_parse",
+                    "round": "1",
+                    "ratio": "1/4",
+                    "models": [{"provider": "deepseek", "model_name": "deepseek-chat"}],
+                },
+                {
+                    "key": "question_content_parse",
+                    "round": "2",
+                    "ratio": "1/4",
+                    "models": [{"provider": "kimi", "model_name": "kimi-k2.6"}],
+                },
+            ],
+        }
+    )
+
+    cfg_mod.save_program_settings_merged(
+        {
+            "question_content_concurrency": 4,
+            "analysis_generation_concurrency": 2,
+        }
+    )
+
+    saved = cfg_mod.load_program_settings()
+    assert saved["analysis_provider"] == "deepseek"
+    assert saved["analysis_model_name"] == "deepseek-reasoner"
+    assert saved["question_content_concurrency"] == 4
+    assert saved["analysis_generation_concurrency"] == 2
+    assert saved["project_parse_model_rows"][0]["models"][0] == {
+        "provider": "deepseek",
+        "model_name": "deepseek-chat",
     }
 
 
@@ -156,6 +204,75 @@ def test_save_program_analysis_target_persists(monkeypatch, tmp_path) -> None:
     saved = cfg_mod.load_program_settings()
     assert saved["analysis_provider"] == "kimi"
     assert saved["analysis_model_name"] == "kimi-k2.6"
+
+
+def test_import_cost_tracking_builds_summary_from_balance_delta(monkeypatch) -> None:
+    state = WizardState(import_show_costs=True)
+
+    class Snapshot:
+        def __init__(self, provider: str, currency: str, amount: str, detail: str) -> None:
+            self.provider = provider
+            self.currency = currency
+            self.amount = Decimal(amount)
+            self.detail = detail
+
+    calls = {"count": 0}
+
+    def fake_query_provider_balance_snapshots(**_kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return [
+                Snapshot("deepseek", "CNY", "100", "已配置，余额 CNY ¥100.00"),
+                Snapshot("kimi", "CNY", "50", "已配置，余额 CNY ¥50.00"),
+            ]
+        return [
+            Snapshot("deepseek", "CNY", "98.5", "已配置，余额 CNY ¥98.50"),
+            Snapshot("kimi", "CNY", "50", "已配置，余额 CNY ¥50.00"),
+        ]
+
+    monkeypatch.setattr("sj_generator.ui.import_costs.query_provider_balance_snapshots", fake_query_provider_balance_snapshots)
+    capture_import_cost_before(state)
+    freeze_import_cost_result(state)
+
+    assert state.import_cost_ready is True
+    assert state.import_cost_total_text == "¥1.5000"
+    assert "DeepSeek" in state.import_cost_summary_text
+    assert "¥1.5000" in state.import_cost_summary_text
+    assert "Kimi" in state.import_cost_detail_text
+    assert any(row.get("provider") == "Kimi" for row in state.import_cost_rows)
+
+
+def test_project_parse_model_rows_preserve_new_concurrency_settings(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.delenv("SJ_GENERATOR_PROGRAM_SETTINGS_PATH", raising=False)
+    cfg_mod.save_program_settings(
+        {
+            "question_content_concurrency": 5,
+            "analysis_generation_concurrency": 2,
+        }
+    )
+
+    cfg_mod.save_project_parse_model_rows(
+        [
+            {
+                "key": "question_number_parse",
+                "round": "1",
+                "ratio": "2/3",
+                "models": [{"provider": "deepseek", "model_name": "deepseek-chat"}],
+            },
+            {
+                "key": "question_content_parse",
+                "round": "2",
+                "ratio": "1/4",
+                "models": [{"provider": "qwen", "model_name": "qwen-max"}],
+            },
+        ]
+    )
+
+    saved = cfg_mod.load_program_settings()
+    assert saved["question_content_concurrency"] == 5
+    assert saved["analysis_generation_concurrency"] == 2
+    assert saved["project_parse_model_rows"][1]["models"][0] == {"provider": "qwen", "model_name": "qwen-max"}
 
 
 def test_project_parse_model_rows_persist(monkeypatch, tmp_path) -> None:
@@ -184,10 +301,62 @@ def test_project_parse_model_rows_persist(monkeypatch, tmp_path) -> None:
 
     rows = cfg_mod.load_project_parse_model_rows()
     assert rows[0]["key"] == "question_number_parse"
+    assert rows[0]["round"] == "1"
     assert rows[0]["ratio"] == "2/3"
     assert rows[0]["models"][0] == {"provider": "deepseek", "model_name": "deepseek-chat"}
     assert rows[1]["key"] == "question_content_parse"
     assert rows[1]["models"][0] == {"provider": "qwen", "model_name": "qwen-max"}
+
+
+def test_question_number_round_is_always_fixed_to_one(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.delenv("SJ_GENERATOR_PROGRAM_SETTINGS_PATH", raising=False)
+
+    cfg_mod.save_project_parse_model_rows(
+        [
+            {
+                "key": "question_number_parse",
+                "round": "8",
+                "ratio": "1/4",
+                "models": [],
+            },
+            {
+                "key": "question_content_parse",
+                "round": "3",
+                "ratio": "1/4",
+                "models": [],
+            },
+        ]
+    )
+
+    rows = cfg_mod.load_project_parse_model_rows()
+    assert rows[0]["round"] == "1"
+    assert rows[1]["round"] == "3"
+
+
+def test_question_content_round_limit_respects_saved_project_config(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.delenv("SJ_GENERATOR_PROGRAM_SETTINGS_PATH", raising=False)
+
+    cfg_mod.save_project_parse_model_rows(
+        [
+            {
+                "key": "question_number_parse",
+                "round": "1",
+                "ratio": "1/4",
+                "models": [],
+            },
+            {
+                "key": "question_content_parse",
+                "round": "8",
+                "ratio": "1/4",
+                "models": [],
+            },
+        ]
+    )
+
+    assert cfg_mod.load_project_parse_model_rows()[1]["round"] == "8"
+    assert iq.question_content_round_limit() == 8
 
 
 def test_load_deepseek_config_prefers_project_parse_model_rows(monkeypatch, tmp_path) -> None:
@@ -350,9 +519,14 @@ def test_deepseek_api_key_only_reads_from_env_and_is_not_saved(monkeypatch, tmp_
 def test_qwen_account_balance_credentials_only_read_from_env_and_not_saved(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("APPDATA", str(tmp_path))
     monkeypatch.delenv("SJ_GENERATOR_QWEN_CONFIG_PATH", raising=False)
+    isolated_settings_path = tmp_path / "program_settings.json"
+    isolated_settings_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("SJ_GENERATOR_PROGRAM_SETTINGS_PATH", str(isolated_settings_path))
     monkeypatch.delenv("QWEN_BASE_URL", raising=False)
     monkeypatch.delenv("QWEN_API_KEY", raising=False)
     monkeypatch.delenv("QWEN_MODEL", raising=False)
+    monkeypatch.delenv("QWEN_QUESTION_NUMBER_MODEL", raising=False)
+    monkeypatch.delenv("QWEN_QUESTION_UNIT_MODEL", raising=False)
     monkeypatch.delenv("QWEN_TIMEOUT_S", raising=False)
     monkeypatch.delenv("QWEN_ACCOUNT_ACCESS_KEY_ID", raising=False)
     monkeypatch.delenv("QWEN_ACCOUNT_ACCESS_KEY_SECRET", raising=False)
@@ -392,9 +566,46 @@ def test_qwen_account_balance_credentials_only_read_from_env_and_not_saved(monke
     assert reloaded.has_account_balance_credentials() is True
 
 
+def test_qwen_available_models_include_qwen36_plus(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.delenv("SJ_GENERATOR_QWEN_CONFIG_PATH", raising=False)
+
+    models = cfg_mod.load_available_models("qwen")
+
+    assert "qwen3.6-plus" in models
+
+
+def test_save_qwen_config_preserves_available_models(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.delenv("SJ_GENERATOR_QWEN_CONFIG_PATH", raising=False)
+
+    saved_models = cfg_mod.save_available_models("qwen", ["qwen-max", "qwen3.6-plus", "qwen-plus"])
+    assert saved_models == ["qwen-max", "qwen3.6-plus", "qwen-plus"]
+
+    cfg = cfg_mod.QwenConfig(
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        api_key="dashscope-key",
+        number_model="qwen-max",
+        model="qwen-max",
+        account_access_key_id="",
+        account_access_key_secret="",
+        timeout_s=60.0,
+    )
+    cfg_mod.save_qwen_config(cfg)
+
+    saved = cfg_mod._read_json_dict(cfg_mod._qwen_config_path())
+    assert saved["available_models"] == ["qwen-max", "qwen3.6-plus", "qwen-plus"]
+
+
 def test_kimi_question_number_model_falls_back_to_legacy_model(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("APPDATA", str(tmp_path))
     monkeypatch.delenv("SJ_GENERATOR_KIMI_CONFIG_PATH", raising=False)
+    monkeypatch.delenv("KIMI_BASE_URL", raising=False)
+    monkeypatch.delenv("KIMI_API_KEY", raising=False)
+    monkeypatch.delenv("KIMI_QUESTION_NUMBER_MODEL", raising=False)
+    monkeypatch.delenv("KIMI_QUESTION_UNIT_MODEL", raising=False)
+    monkeypatch.delenv("KIMI_MODEL", raising=False)
+    monkeypatch.delenv("KIMI_TIMEOUT_S", raising=False)
     path = cfg_mod._kimi_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -703,6 +914,37 @@ def test_describe_aliyun_account_balance_payload_supports_available_amount() -> 
     assert got == "已配置，阿里云账户余额 CNY ¥123.40"
 
 
+def test_to_fast_timeout_cfg_caps_slow_balance_query_timeout() -> None:
+    cfg = cfg_mod.KimiConfig(
+        base_url="https://api.moonshot.cn/v1",
+        api_key="test-key",
+        number_model="kimi-k2.6",
+        model="kimi-k2.6",
+        timeout_s=120.0,
+    )
+
+    fast_cfg = cfg_mod.with_capped_timeout(cfg, 12.0)
+
+    assert fast_cfg.timeout_s == 12.0
+    assert fast_cfg.base_url == cfg.base_url
+    assert fast_cfg.model == cfg.model
+
+
+def test_run_checks_in_parallel_returns_on_first_failure() -> None:
+    start = time.perf_counter()
+
+    with pytest.raises(RuntimeError, match="boom"):
+        run_callables_in_parallel_fail_fast(
+            callables=[
+                lambda: (_ for _ in ()).throw(RuntimeError("boom")),
+                lambda: time.sleep(0.3),
+            ],
+            max_workers=2,
+        )
+
+    assert time.perf_counter() - start < 0.25
+
+
 def test_run_analysis_tasks_supports_three_way_concurrency() -> None:
     tasks = [(i, f"题目{i}", "A") for i in range(5)]
     lock = threading.Lock()
@@ -742,7 +984,10 @@ def test_normalize_ai_concurrency_keeps_allowed_values_and_falls_back() -> None:
     assert normalize_ai_concurrency(3) == 3
     assert normalize_ai_concurrency(4) == 4
     assert normalize_ai_concurrency(5) == 5
-    assert normalize_ai_concurrency(6) == 3
+    assert normalize_ai_concurrency(6) == 6
+    assert normalize_ai_concurrency(7) == 7
+    assert normalize_ai_concurrency(8) == 8
+    assert normalize_ai_concurrency(9) == 3
     assert normalize_ai_concurrency(None) == 3
 
 
@@ -1078,3 +1323,26 @@ def test_normalize_question_ref_list_supports_rich_json_and_legacy_strings() -> 
         {"number": "2", "question_type": "可转多选"},
     ]
     assert legacy == [{"number": "3"}, {"number": "4"}]
+
+
+def test_normalize_question_ref_list_preserves_duplicate_warning() -> None:
+    rich = iq._normalize_question_ref_list(
+        [
+            {"number": "7", "question_type": "单选", "duplicate_warning": "存在可疑的题号重复"},
+            {"number": "7", "question_type": "单选"},
+            {"number": "8", "question_type": "多选", "duplicate_warning": "duplicate suspected"},
+        ]
+    )
+
+    assert rich == [
+        {"number": "7", "question_type": "单选", "duplicate_warning": "存在可疑的题号重复"},
+        {"number": "8", "question_type": "多选", "duplicate_warning": "存在可疑的题号重复"},
+    ]
+
+
+def test_parse_question_ref_response_text_supports_special_markers() -> None:
+    with pytest.raises(iq._QuestionRefSpecialCaseError, match="题号重复"):
+        iq._parse_question_ref_response_text("[题号重复]")
+
+    with pytest.raises(iq._QuestionRefSpecialCaseError, match="所给文本无选择题目"):
+        iq._parse_question_ref_response_text("[所给文本无选择题目]")

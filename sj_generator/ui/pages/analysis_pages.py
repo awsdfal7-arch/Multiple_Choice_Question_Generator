@@ -15,23 +15,20 @@ from PyQt6.QtWidgets import (
     QWizardPage,
 )
 
-from sj_generator.ai.client import LlmClient, LlmConfig
-from sj_generator.ai.explanations import ExplanationInputs, generate_explanation
-from sj_generator.ai.task_runner import run_tasks_in_parallel
-from sj_generator.config import (
+from sj_generator.infrastructure.llm.client import LlmClient, LlmConfig
+from sj_generator.infrastructure.llm.explanations import ExplanationInputs, generate_explanation
+from sj_generator.infrastructure.llm.task_runner import run_tasks_in_parallel
+from sj_generator.application.settings import (
     load_deepseek_config,
     load_kimi_config,
     load_qwen_config,
-    to_analysis_llm_config,
-    to_kimi_llm_config,
-    to_qwen_llm_config,
 )
-from sj_generator.io.draft_db_import import import_draft_questions_to_db
-from sj_generator.models import Question
-from sj_generator.paths import app_paths, common_mistakes_md_path
-from sj_generator.ui.state import (
+from sj_generator.domain.entities import Question
+from sj_generator.shared.paths import app_paths
+from sj_generator.ui.import_db_service import commit_draft_questions_to_db
+from sj_generator.ui.table_copy import CopyableTableWidget
+from sj_generator.application.state import (
     WizardState,
-    library_db_path_from_repo_parent_dir_text,
     normalize_ai_concurrency,
     normalize_analysis_model_name,
     normalize_analysis_provider,
@@ -127,37 +124,6 @@ def _format_choice_summary(question: Question) -> str:
     return "\n".join(lines)
 
 
-def _commit_draft_questions_to_db(page: QWizardPage, state: WizardState) -> bool:
-    if state.db_import_completed:
-        return True
-
-    questions = list(state.draft_questions)
-    if not questions:
-        _show_message_box(page, title="无法导入数据库", text="当前草稿为空，无法写入数据库。", icon=QMessageBox.Icon.Warning)
-        return False
-
-    level_path = state.ai_import_level_path.strip()
-    if not level_path:
-        _show_message_box(page, title="无法导入数据库", text="未填写层级归属，无法写入数据库。", icon=QMessageBox.Icon.Warning)
-        return False
-
-    try:
-        count = import_draft_questions_to_db(
-            db_path=library_db_path_from_repo_parent_dir_text(state.default_repo_parent_dir_text),
-            questions=questions,
-            level_path=level_path,
-            source_files=state.ai_source_files or [],
-            textbook_version=state.preferred_textbook_version,
-        )
-    except Exception as e:
-        state.db_import_error = str(e)
-        _show_message_box(page, title="导入数据库失败", text=str(e), icon=QMessageBox.Icon.Critical)
-        return False
-
-    state.mark_db_import_completed(count)
-    return True
-
-
 class AiAnalysisPage(QWizardPage):
     def __init__(self, state: WizardState) -> None:
         super().__init__()
@@ -169,7 +135,7 @@ class AiAnalysisPage(QWizardPage):
         self._current_label = QLabel("")
         self._current_label.setWordWrap(True)
 
-        self._table = QTableWidget()
+        self._table = CopyableTableWidget()
         self._table.setColumnCount(7)
         self._table.setHorizontalHeaderLabels(["编号", "题目", "选项", "答案", "组合属性", "解析", "解析用时"])
         self._table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
@@ -251,7 +217,7 @@ class AiAnalysisPage(QWizardPage):
     def validatePage(self) -> bool:
         if self._running or (not self._done):
             return False
-        return _commit_draft_questions_to_db(self, self._state)
+        return commit_draft_questions_to_db(self, self._state)
 
     def _refresh_status(self) -> None:
         self._stop_btn.setEnabled(self._running)
@@ -386,7 +352,7 @@ class AiAnalysisPage(QWizardPage):
             reference_md_paths=ref_paths,
             include_common_mistakes=self._state.analysis_include_common_mistakes,
             root_dir=root_dir,
-            max_workers=normalize_ai_concurrency(self._state.ai_concurrency),
+            max_workers=normalize_ai_concurrency(self._state.analysis_generation_concurrency),
         )
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
@@ -439,7 +405,7 @@ class AiAnalysisPage(QWizardPage):
         self._current_task_no = current
         self._total_task_count = total
         self._status_label.setText(self._build_running_status())
-        workers = normalize_ai_concurrency(self._state.ai_concurrency)
+        workers = normalize_ai_concurrency(self._state.analysis_generation_concurrency)
         target_text = _analysis_target_text(self._state.analysis_provider, self._state.analysis_model_name)
         self._current_label.setText(f"选择题 {current}/{total} 题已发起解析（模型：{target_text}，并发 {workers} 路）")
 
@@ -559,7 +525,7 @@ class AiAnalysisPage(QWizardPage):
         total = self._total_task_count
         current = self._current_task_no
         completed = self._completed_task_count
-        workers = normalize_ai_concurrency(self._state.ai_concurrency)
+        workers = normalize_ai_concurrency(self._state.analysis_generation_concurrency)
         target_text = _analysis_target_text(self._state.analysis_provider, self._state.analysis_model_name)
         if total > 0 and current > 0:
             return f"批量生成：模型 {target_text}，并发 {workers} 路，已发起 {current}/{total}，已完成 {completed}/{total}"

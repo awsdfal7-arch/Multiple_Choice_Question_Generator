@@ -22,6 +22,31 @@ QToolButton {
     border-radius: 0px;
 }
 
+QTableWidget,
+QTableView {
+    border: 1px solid #000000;
+    border-radius: 0px;
+    background: #ffffff;
+    gridline-color: #000000;
+    outline: none;
+}
+
+QTableCornerButton::section {
+    background: #ffffff;
+    border: 0px;
+    border-right: 1px solid #000000;
+    border-bottom: 1px solid #000000;
+}
+
+QTableWidget QHeaderView::section,
+QTableView QHeaderView::section {
+    background: #ffffff;
+    border: 0px;
+    border-right: 1px solid #000000;
+    border-bottom: 1px solid #000000;
+    padding: 4px 6px;
+}
+
 QPushButton:hover,
 QToolButton:hover {
     background: #f2f2f2;

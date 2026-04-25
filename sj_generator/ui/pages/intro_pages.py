@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
 )
 
 from sj_generator.ui.constants import PAGE_WELCOME
-from sj_generator.paths import app_paths
+from sj_generator.shared.paths import app_paths
 from sj_generator.ui.styles import rounded_panel_stylesheet
 
 _IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")

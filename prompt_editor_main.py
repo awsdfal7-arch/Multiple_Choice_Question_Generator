@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from sj_generator.ai.prompt_templates import (
+from sj_generator.infrastructure.llm.prompt_templates import (
     PROMPT_FIELDS,
     default_import_prompts,
     import_prompt_config_path,

@@ -1,4 +1,4 @@
-from sj_generator.ui.wizard import main
+from sj_generator.app.bootstrap import main
 
 
 if __name__ == "__main__":

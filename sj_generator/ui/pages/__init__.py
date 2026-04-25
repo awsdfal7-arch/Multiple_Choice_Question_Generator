@@ -3,6 +3,7 @@ __all__ = [
     "WelcomePage",
     "AiSelectFilesPage",
     "AiImportPage",
+    "AiImportContentPage",
     "DedupeResultPage",
     "AiAnalysisPage",
     "ImportSuccessPage",
@@ -19,13 +20,17 @@ def __getattr__(name: str):
 
         return WelcomePage
     if name == "AiSelectFilesPage":
-        from .import_pages import AiSelectFilesPage
+        from .import_flow import AiSelectFilesPage
 
         return AiSelectFilesPage
     if name == "AiImportPage":
-        from .import_pages import AiImportPage
+        from .import_flow import AiImportPage
 
         return AiImportPage
+    if name == "AiImportContentPage":
+        from .import_flow import AiImportContentPage
+
+        return AiImportContentPage
     if name == "DedupeResultPage":
         from .dedupe_pages import DedupeResultPage
 
