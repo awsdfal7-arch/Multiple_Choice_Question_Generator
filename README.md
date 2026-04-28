@@ -49,13 +49,19 @@ python main.py
 项目当前提供两类产物：
 
 - 目录版程序：`dist/思政智题云枢/`
-- 安装包：`installer_output/sj-generator-setup-cn-dev.exe`
+- 安装包：`installer_output/思政智能云枢.exe`
 
 最简单的方式是直接运行：
 
 ```bat
 build_installer.bat
 ```
+
+执行完成后会自动：
+
+- 生成安装包 `installer_output/思政智能云枢.exe`
+- 清理 `build/`
+- 清理 `dist/`
 
 如需指定版本号：
 
@@ -66,11 +72,11 @@ build_installer.bat 0.1.0
 如需重新构建：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\build_windows_onedir.ps1 -Clean
+powershell -ExecutionPolicy Bypass -File .\packaging\build_windows_onedir.ps1 -Clean
 ```
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\build_windows_installer.ps1 -Clean -IsccPath "C:\Install\Inno Setup 6\ISCC.exe"
+powershell -ExecutionPolicy Bypass -File .\packaging\build_windows_installer.ps1 -Clean -IsccPath "C:\Install\Inno Setup 6\ISCC.exe"
 ```
 
 ## 目录说明
@@ -78,12 +84,9 @@ powershell -ExecutionPolicy Bypass -File .\build_windows_installer.ps1 -Clean -I
 - `main.py`：程序入口
 - `sj_generator/`：项目源码
 - `reference/`：参考资料与内置资源
-- `installer_languages/`：安装包语言文件
+- `packaging/`：打包脚本与打包配置
 - `installer_output/`：安装包输出目录
 - `build_installer.bat`：一键打包安装包脚本
-- `build_windows_onedir.ps1`：目录版构建脚本
-- `build_windows_installer.ps1`：安装包构建脚本
-- `installer_inno.iss`：Inno Setup 安装脚本
 
 ## 文档
 
@@ -91,4 +94,5 @@ powershell -ExecutionPolicy Bypass -File .\build_windows_installer.ps1 -Clean -I
 
 ## Github
 
-- 项目地址：[https://github.com/awsdfal7-arch/IdeoPivot](https://github.com/awsdfal7-arch/IdeoPivot)
+- 项目地址：<https://github.com/awsdfal7-arch/IdeoPivot>
+
